@@ -1,0 +1,2 @@
+The rust implementation of pubgrub uses a trait `DependencyProvider` to allow for lots of customization of the algorithms behavure.
+This is a repo to experiment with whether functionality needed by real world package managers can be expressed using this trait.
