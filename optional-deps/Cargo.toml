@@ -12,7 +12,3 @@ license = "MPL-2.0"
 
 [dependencies]
 pubgrub = { version = "0.2.1", features = ["serde"] }
-crates-index = "0.17.0"
-semver = "1.0.3"
-serde = { version = "1.0.126", features = ["derive"] }
-thiserror = "1.0.26"
