@@ -1,0 +1,18 @@
+[package]
+name = "optional-deps"
+version = "0.1.0"
+authors = [
+    "Eh2406 <YeomanYaacov@gmail.com>",
+    "Matthieu Pizenberg <matthieu.pizenberg@gmail.com>",
+]
+edition = "2018"
+license = "MPL-2.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+pubgrub = { version = "0.2.1", features = ["serde"] }
+crates-index = "0.17.0"
+semver = "1.0.3"
+serde = { version = "1.0.126", features = ["derive"] }
+thiserror = "1.0.26"
