@@ -104,7 +104,7 @@ impl DependencyProvider<Package, Version> for Index {
 /// Helper function to convert Index deps into what is expected by the dependency provider.
 fn from_deps(deps: &Map<String, Dep>) -> DependencyConstraints<Package, Version> {
     deps.iter()
-        .map(|(base_pkg, dep)| {
+        .flat_map(|(base_pkg, dep)| {
             let feature_count = dep.features.len();
             dep.features
                 .iter()
@@ -124,7 +124,6 @@ fn from_deps(deps: &Map<String, Dep>) -> DependencyConstraints<Package, Version>
                 // If there was no feature, we take the base package, otherwise, we don't.
                 .take(feature_count.max(1))
         })
-        .flatten()
         .collect()
 }
 

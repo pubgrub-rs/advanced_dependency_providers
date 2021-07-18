@@ -55,9 +55,8 @@ impl Index {
     pub fn available_versions(&self, package: &PackageName) -> impl Iterator<Item = &Version> {
         self.packages
             .get(package)
-            .map(|k| k.keys())
             .into_iter()
-            .flatten()
+            .flat_map(|k| k.keys())
             .rev()
     }
 
