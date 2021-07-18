@@ -264,4 +264,17 @@ pub mod tests {
             ]),
         );
     }
+
+    #[test]
+    /// b/feat1 and b/feat2 are not available with the same version of b.
+    fn failure_when_different_feature_versions() {
+        let mut index = Index::new();
+        index.add_deps("a", 0, &[("b", .., &["feat1", "feat2"])]);
+        index.add_feature("b", 0, "feat1", &[("f1", .., &[])]);
+        // feat2 is only available for version 1 of b
+        index.add_feature("b", 1, "feat2", &[("f2", .., &[])]);
+        index.add_deps::<R>("f1", 0, &[]);
+        index.add_deps::<R>("f2", 0, &[]);
+        assert!(resolve(&index, "a", 0).is_err());
+    }
 }
