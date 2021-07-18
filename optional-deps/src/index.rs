@@ -7,23 +7,23 @@ use pubgrub::version::NumberVersion as Version;
 use std::collections::{BTreeMap, BTreeSet as Set};
 
 /// Each package is identified by its name.
-pub type Package = String;
+pub type PackageName = String;
 /// Features are identified by their name.
 pub type Feature = String;
 
 /// Global registry of known packages.
 pub struct Index {
     /// Specify dependencies of each package version.
-    pub packages: Map<Package, BTreeMap<Version, Deps>>,
+    pub packages: Map<PackageName, BTreeMap<Version, Deps>>,
 }
 
 /// Dependencies include mandatory dependencies and optional dependencies.
 /// Optional dependencies are identified by an option called a "feature".
 pub struct Deps {
     /// The regular, mandatory dependencies.
-    pub mandatory: Map<Package, Dep>,
+    pub mandatory: Map<PackageName, Dep>,
     /// The optional, feature-gated dependencies.
-    pub optional: Map<Feature, Map<Package, Dep>>,
+    pub optional: Map<Feature, Map<PackageName, Dep>>,
 }
 
 /// A dependency is specified with a range, and with a set of activated features.
@@ -52,7 +52,7 @@ impl Index {
     }
 
     /// List existing versions for a given package with newest versions first.
-    pub fn available_versions(&self, package: &Package) -> impl Iterator<Item = &Version> {
+    pub fn available_versions(&self, package: &PackageName) -> impl Iterator<Item = &Version> {
         self.packages
             .get(package)
             .map(|k| k.keys())
