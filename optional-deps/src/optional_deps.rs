@@ -7,6 +7,7 @@ use pubgrub::range::Range;
 use pubgrub::solver::{Dependencies, DependencyConstraints, DependencyProvider};
 use pubgrub::type_aliases::Map;
 use pubgrub::version::NumberVersion as Version;
+use std::str::FromStr;
 
 /// A package is either a base package like "a",
 /// or a feature package, corresponding to a feature associated to a base package.
@@ -21,6 +22,21 @@ impl Package {
         match self {
             Package::Base(pkg) => pkg,
             Package::Feature { base, .. } => base,
+        }
+    }
+}
+
+impl FromStr for Package {
+    type Err = String;
+    fn from_str(pkg: &str) -> Result<Self, Self::Err> {
+        let mut pkg_parts = pkg.split('/');
+        match (pkg_parts.next(), pkg_parts.next()) {
+            (Some(base), None) => Ok(Package::Base(base.to_string())),
+            (Some(base), Some(feat)) => Ok(Package::Feature {
+                base: base.to_string(),
+                feature: feat.to_string(),
+            }),
+            _ => Err(format!("{} is not a valid package name", pkg)),
         }
     }
 }
@@ -117,8 +133,9 @@ fn from_deps(deps: &Map<String, Dep>) -> DependencyConstraints<Package, Version>
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use core::fmt::Debug;
     use pubgrub::error::PubGrubError;
-    use pubgrub::type_aliases::SelectedDependencies;
+    use pubgrub::type_aliases::{Map, SelectedDependencies};
     type R = core::ops::RangeFull;
 
     /// Helper function to simplify the tests code.
@@ -127,20 +144,26 @@ pub mod tests {
         pkg: &str,
         version: u32,
     ) -> Result<SelectedDependencies<Package, Version>, PubGrubError<Package, Version>> {
-        let mut pkg_parts = pkg.split('/');
-        match (pkg_parts.next(), pkg_parts.next()) {
-            (Some(base), None) => {
-                pubgrub::solver::resolve(provider, Package::Base(base.to_string()), version)
-            }
-            (Some(base), Some(feat)) => pubgrub::solver::resolve(
-                provider,
-                Package::Feature {
-                    base: base.to_string(),
-                    feature: feat.to_string(),
-                },
-                version,
-            ),
-            _ => panic!("wrong package in tests"),
+        let pkg = Package::from_str(pkg).unwrap();
+        pubgrub::solver::resolve(provider, pkg, version)
+    }
+
+    /// Helper function to build a solution selection.
+    fn select(packages: &[(&str, u32)]) -> SelectedDependencies<Package, Version> {
+        packages
+            .iter()
+            .map(|(p, v)| (Package::from_str(p).unwrap(), Version::from(*v)))
+            .collect()
+    }
+
+    /// Helper function to compare a solution to an exact selection of package versions.
+    fn assert_map_eq<K: Eq + std::hash::Hash, V: PartialEq + Debug>(
+        h1: &Map<K, V>,
+        h2: &Map<K, V>,
+    ) {
+        assert_eq!(h1.len(), h2.len());
+        for (k, v) in h1.iter() {
+            assert_eq!(h2.get(k), Some(v));
         }
     }
 
@@ -148,7 +171,7 @@ pub mod tests {
     fn success_when_no_feature() {
         let mut index = Index::new();
         index.add_deps::<R>("a", 0, &[]);
-        resolve(&index, "a", 0).unwrap();
+        assert_map_eq(&resolve(&index, "a", 0).unwrap(), &select(&[("a", 0)]));
     }
 
     #[test]
@@ -162,7 +185,10 @@ pub mod tests {
     fn success_when_feature_with_no_dep() {
         let mut index = Index::new();
         index.add_feature::<R>("a", 0, "feat", &[]);
-        resolve(&index, "a/feat", 0).unwrap();
+        assert_map_eq(
+            &resolve(&index, "a/feat", 0).unwrap(),
+            &select(&[("a", 0), ("a/feat", 0)]),
+        );
     }
 
     #[test]
@@ -170,7 +196,10 @@ pub mod tests {
         let mut index = Index::new();
         index.add_feature("a", 0, "feat", &[("f", .., &[])]);
         index.add_deps::<R>("f", 0, &[]);
-        resolve(&index, "a/feat", 0).unwrap();
+        assert_map_eq(
+            &resolve(&index, "a/feat", 0).unwrap(),
+            &select(&[("a", 0), ("a/feat", 0), ("f", 0)]),
+        );
     }
 
     #[test]
@@ -179,7 +208,10 @@ pub mod tests {
         index.add_feature("a", 0, "feat", &[("f1", .., &[]), ("f2", .., &[])]);
         index.add_deps::<R>("f1", 0, &[]);
         index.add_deps::<R>("f2", 0, &[]);
-        resolve(&index, "a/feat", 0).unwrap();
+        assert_map_eq(
+            &resolve(&index, "a/feat", 0).unwrap(),
+            &select(&[("a", 0), ("a/feat", 0), ("f1", 0), ("f2", 0)]),
+        );
     }
 
     #[test]
@@ -188,7 +220,10 @@ pub mod tests {
         index.add_deps("a", 0, &[("b", .., &["feat"])]);
         index.add_feature("b", 0, "feat", &[("f", .., &[])]);
         index.add_deps::<R>("f", 0, &[]);
-        resolve(&index, "a", 0).unwrap();
+        assert_map_eq(
+            &resolve(&index, "a", 0).unwrap(),
+            &select(&[("a", 0), ("b", 0), ("b/feat", 0), ("f", 0)]),
+        );
     }
 
     #[test]
@@ -197,6 +232,15 @@ pub mod tests {
         index.add_deps("a", 0, &[("b", .., &["feat"])]);
         index.add_feature("b", 0, "feat", &[("f", .., &["rec_feat"])]);
         index.add_feature::<R>("f", 0, "rec_feat", &[]);
-        resolve(&index, "a", 0).unwrap();
+        assert_map_eq(
+            &resolve(&index, "a", 0).unwrap(),
+            &select(&[
+                ("a", 0),
+                ("b", 0),
+                ("b/feat", 0),
+                ("f", 0),
+                ("f/rec_feat", 0),
+            ]),
+        );
     }
 }
