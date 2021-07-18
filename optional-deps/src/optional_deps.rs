@@ -243,4 +243,25 @@ pub mod tests {
             ]),
         );
     }
+
+    #[test]
+    fn success_when_multiple_features() {
+        let mut index = Index::new();
+        index.add_deps("a", 0, &[("b", .., &["feat1", "feat2"])]);
+        index.add_feature("b", 0, "feat1", &[("f1", .., &[])]);
+        index.add_feature("b", 0, "feat2", &[("f2", .., &[])]);
+        index.add_deps::<R>("f1", 0, &[]);
+        index.add_deps::<R>("f2", 0, &[]);
+        assert_map_eq(
+            &resolve(&index, "a", 0).unwrap(),
+            &select(&[
+                ("a", 0),
+                ("b", 0),
+                ("b/feat1", 0),
+                ("b/feat2", 0),
+                ("f1", 0),
+                ("f2", 0),
+            ]),
+        );
+    }
 }
