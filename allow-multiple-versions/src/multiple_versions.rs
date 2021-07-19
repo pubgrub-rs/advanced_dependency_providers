@@ -184,9 +184,16 @@ impl DependencyProvider<Package, SemVer> for Index {
 /// this returns that bucket identifier.
 /// Otherwise, it returns None.
 fn single_bucket_spanned(range: &Range<SemVer>) -> Option<u32> {
-    // TODO: problem here since I need to extract somehow the lower and higher bounds
-    // of the range, but the Range API does not allow that.
-    todo!()
+    range.lowest_version().and_then(|low| {
+        let bucket_range = Range::between(low, low.bump_major());
+        let bucket_intersect_range = range.intersection(&bucket_range);
+        if range == &bucket_intersect_range {
+            let (major, _, _) = low.into();
+            Some(major)
+        } else {
+            None
+        }
+    })
 }
 
 // TESTS #######################################################################
