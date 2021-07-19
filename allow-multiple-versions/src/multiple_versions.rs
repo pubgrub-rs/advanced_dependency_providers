@@ -78,14 +78,27 @@ impl Index {
             Package::Bucket(p) => {
                 let bucket_range = Range::between((p.bucket, 0, 0), (p.bucket + 1, 0, 0));
                 Either::Left(
-                    self.available_versions(package.pkg_name())
+                    self.available_versions(&p.name)
                         .filter(move |v| bucket_range.contains(*v))
                         .cloned(),
                 )
             }
             // If we are on a proxi, there is one version per bucket in the target package.
-            Package::Proxi { target, .. } => {
-                Either::Right(bucket_versions(self.available_versions(&target).cloned()))
+            // We can additionally filter versions to only those inside the dependency range.
+            Package::Proxi { target, source } => {
+                let dep_range = self
+                    .packages
+                    .get(&source.0.name)
+                    .unwrap()
+                    .get(&source.1)
+                    .unwrap()
+                    .get(target)
+                    .unwrap();
+                Either::Right(bucket_versions(
+                    self.available_versions(&target)
+                        .filter(move |v| dep_range.contains(v))
+                        .cloned(),
+                ))
             }
         }
     }
