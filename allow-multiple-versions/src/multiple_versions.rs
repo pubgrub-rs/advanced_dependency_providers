@@ -163,16 +163,18 @@ impl DependencyProvider<Package, SemVer> for Index {
             }
             Package::Proxi { target, .. } => {
                 // If this is a proxi package, it depends on a single bucket package, the target,
-                // at a range of versions corresponding to the bucket range of the version asked.
+                // at a range of versions corresponding to the bucket range of the version asked,
+                // intersected with the original dependency range.
                 let (target_bucket, _, _) = version.clone().into();
                 let bucket_range = Range::between((target_bucket, 0, 0), (target_bucket + 1, 0, 0));
+                let target_range = deps.get(target).unwrap();
                 let mut bucket_dep = Map::default();
                 bucket_dep.insert(
                     Package::Bucket(Bucket {
                         name: target.clone(),
                         bucket: target_bucket,
                     }),
-                    bucket_range,
+                    bucket_range.intersection(target_range),
                 );
                 Ok(Dependencies::Known(bucket_dep))
             }
