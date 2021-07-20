@@ -72,16 +72,20 @@ impl Display for Bucket {
 impl Index {
     /// List existing versions for a given package with newest versions first.
     pub fn list_versions(&self, package: &Package) -> impl Iterator<Item = SemVer> + '_ {
+        eprintln!("list_versions({}):", package);
         match package {
             // If we are on a bucket, we need to filter versions
             // to only keep those within the bucket.
             Package::Bucket(p) => {
                 let bucket_range = Range::between((p.bucket, 0, 0), (p.bucket + 1, 0, 0));
-                Either::Left(
-                    self.available_versions(&p.name)
-                        .filter(move |v| bucket_range.contains(*v))
-                        .cloned(),
-                )
+                // Either::Left(
+                let vs: Vec<_> = self
+                    .available_versions(&p.name)
+                    .filter(move |v| bucket_range.contains(*v))
+                    .cloned()
+                    .collect();
+                eprintln!("{:?}", &vs[..]);
+                vs.into_iter()
             }
             // If we are on a proxi, there is one version per bucket in the target package.
             // We can additionally filter versions to only those inside the dependency range.
@@ -94,11 +98,15 @@ impl Index {
                     .unwrap()
                     .get(target)
                     .unwrap();
-                Either::Right(bucket_versions(
+                // Either::Right(
+                let vs: Vec<_> = bucket_versions(
                     self.available_versions(&target)
                         .filter(move |v| dep_range.contains(v))
                         .cloned(),
-                ))
+                )
+                .collect();
+                eprintln!("{:?}", &vs[..]);
+                vs.into_iter()
             }
         }
     }
@@ -212,3 +220,64 @@ fn single_bucket_spanned(range: &Range<SemVer>) -> Option<u32> {
 }
 
 // TESTS #######################################################################
+
+#[cfg(test)]
+pub mod tests {
+    use super::*;
+    use core::fmt::Debug;
+    use pubgrub::error::PubGrubError;
+    use pubgrub::type_aliases::{Map, SelectedDependencies};
+    type R = core::ops::RangeFull;
+
+    /// Helper function to simplify the tests code.
+    fn resolve(
+        provider: &impl DependencyProvider<Package, SemVer>,
+        pkg: &str,
+        version: (u32, u32, u32),
+    ) -> Result<SelectedDependencies<Package, SemVer>, PubGrubError<Package, SemVer>> {
+        let pkg = Package::from_str(pkg).unwrap();
+        pubgrub::solver::resolve(provider, pkg, version).map(|solution| {
+            // remove proxi packages from the solution
+            solution
+                .into_iter()
+                .filter(|(pkg, _)| match pkg {
+                    Package::Bucket(_) => true,
+                    _ => false,
+                })
+                .collect()
+        })
+    }
+
+    /// Helper function to build a solution selection.
+    fn select(packages: &[(&str, (u32, u32, u32))]) -> SelectedDependencies<Package, SemVer> {
+        packages
+            .iter()
+            .map(|(p, v)| (Package::from_str(p).unwrap(), SemVer::from(*v)))
+            .collect()
+    }
+
+    /// Helper function to compare a solution to an exact selection of package versions.
+    fn assert_map_eq<K: Eq + std::hash::Hash, V: PartialEq + Debug>(
+        h1: &Map<K, V>,
+        h2: &Map<K, V>,
+    ) {
+        assert_eq!(h1.len(), h2.len());
+        for (k, v) in h1.iter() {
+            assert_eq!(h2.get(k), Some(v));
+        }
+    }
+
+    #[test]
+    fn success_when_simple() {
+        let mut index = Index::new();
+        index.add_deps("a", (1, 4, 0), &[("b", (1, 1, 0)..(2, 9, 0))]);
+        index.add_deps("b", (1, 3, 0), &[("c", (1, 1, 0)..(1, 1, 1))]);
+        index.add_deps("b", (2, 7, 0), &[("d", (3, 1, 0)..(3, 1, 1))]);
+        index.add_deps::<R>("c", (1, 1, 0), &[]);
+        index.add_deps::<R>("d", (3, 1, 0), &[]);
+        assert_map_eq(
+            &resolve(&index, "a#1", (1, 4, 0)).unwrap(),
+            &select(&[("a#1", (1, 4, 0)), ("b#2", (2, 7, 0)), ("d#3", (3, 1, 0))]),
+        );
+    }
+}
