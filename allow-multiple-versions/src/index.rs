@@ -34,7 +34,7 @@ impl Index {
             .rev()
     }
 
-    /// Register a package and its mandatory dependencies in the index.
+    /// Register a package and its dependencies in the index.
     pub fn add_deps<R: RangeBounds<(u32, u32, u32)>>(
         &mut self,
         package: &str,
