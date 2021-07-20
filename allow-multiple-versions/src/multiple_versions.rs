@@ -84,7 +84,7 @@ impl Index {
                     .filter(move |v| bucket_range.contains(*v))
                     .cloned()
                     .collect();
-                eprintln!("{:?}", &vs[..]);
+                eprintln!("   {:?}", &vs[..]);
                 vs.into_iter()
             }
             // If we are on a proxi, there is one version per bucket in the target package.
@@ -105,7 +105,7 @@ impl Index {
                         .cloned(),
                 )
                 .collect();
-                eprintln!("{:?}", &vs[..]);
+                eprintln!("   {:?}", &vs[..]);
                 vs.into_iter()
             }
         }
@@ -150,20 +150,23 @@ impl DependencyProvider<Package, SemVer> for Index {
         package: &Package,
         version: &SemVer,
     ) -> Result<Dependencies<Package, SemVer>, Box<dyn std::error::Error>> {
+        eprintln!("get_dependencies({}, {}):", package, version);
         let all_versions = match self.packages.get(package.pkg_name()) {
             None => return Ok(Dependencies::Unknown),
             Some(all_versions) => all_versions,
         };
-        let deps = match all_versions.get(version) {
-            None => return Ok(Dependencies::Unknown),
-            Some(deps) => deps,
-        };
+        eprintln!("   found package: {}", package.pkg_name());
 
         match package {
             Package::Bucket(pkg) => {
                 // If this is a bucket, we convert each original dependency into
                 // either a dependency to a bucket package if the range is fully contained within one bucket,
                 // or a dependency to a proxi package at any version otherwise.
+                let deps = match all_versions.get(version) {
+                    None => return Ok(Dependencies::Unknown),
+                    Some(deps) => deps,
+                };
+                eprintln!("   found version: {}", version);
                 let pkg_deps = deps
                     .iter()
                     .map(|(name, range)| {
@@ -182,10 +185,15 @@ impl DependencyProvider<Package, SemVer> for Index {
                     .collect();
                 Ok(Dependencies::Known(pkg_deps))
             }
-            Package::Proxi { target, .. } => {
+            Package::Proxi { source, target } => {
                 // If this is a proxi package, it depends on a single bucket package, the target,
                 // at a range of versions corresponding to the bucket range of the version asked,
                 // intersected with the original dependency range.
+                let deps = match all_versions.get(&source.1) {
+                    None => return Ok(Dependencies::Unknown),
+                    Some(deps) => deps,
+                };
+                eprintln!("   found version: {}", source.1);
                 let (target_bucket, _, _) = version.clone().into();
                 let bucket_range = Range::between((target_bucket, 0, 0), (target_bucket + 1, 0, 0));
                 let target_range = deps.get(target).unwrap();
@@ -197,6 +205,7 @@ impl DependencyProvider<Package, SemVer> for Index {
                     }),
                     bucket_range.intersection(target_range),
                 );
+                eprintln!("{:?}", &bucket_dep);
                 Ok(Dependencies::Known(bucket_dep))
             }
         }
@@ -268,7 +277,8 @@ pub mod tests {
     }
 
     #[test]
-    fn success_when_simple() {
+    /// Example in guide.
+    fn success_when_simple_version() {
         let mut index = Index::new();
         index.add_deps("a", (1, 4, 0), &[("b", (1, 1, 0)..(2, 9, 0))]);
         index.add_deps("b", (1, 3, 0), &[("c", (1, 1, 0)..(1, 1, 1))]);
@@ -279,5 +289,40 @@ pub mod tests {
             &resolve(&index, "a#1", (1, 4, 0)).unwrap(),
             &select(&[("a#1", (1, 4, 0)), ("b#2", (2, 7, 0)), ("d#3", (3, 1, 0))]),
         );
+    }
+
+    #[test]
+    /// "a" depends on "d"@1 and "d"@2 via "b" and "c".
+    fn success_when_double_version() {
+        let mut index = Index::new();
+        index.add_deps("a", (1, 0, 0), &[("b", (1, 0, 0)..(2, 0, 0))]);
+        index.add_deps("a", (1, 0, 0), &[("c", (1, 0, 0)..(2, 0, 0))]);
+        index.add_deps("b", (1, 0, 0), &[("d", (1, 0, 0)..(2, 0, 0))]);
+        index.add_deps("c", (1, 0, 0), &[("d", (2, 0, 0)..(3, 0, 0))]);
+        index.add_deps::<R>("d", (1, 0, 0), &[]);
+        index.add_deps::<R>("d", (2, 0, 0), &[]);
+        assert_map_eq(
+            &resolve(&index, "a#1", (1, 0, 0)).unwrap(),
+            &select(&[
+                ("a#1", (1, 0, 0)),
+                ("b#1", (1, 0, 0)),
+                ("c#1", (1, 0, 0)),
+                ("d#1", (1, 0, 0)),
+                ("d#2", (2, 0, 0)),
+            ]),
+        );
+    }
+
+    #[test]
+    /// "a" depends on "d"@1.1 and "d"@1.5 via "b" and "c" which is forbidden
+    fn error_when_same_bucket() {
+        let mut index = Index::new();
+        index.add_deps("a", (1, 0, 0), &[("b", (1, 0, 0)..(2, 0, 0))]);
+        index.add_deps("a", (1, 0, 0), &[("c", (1, 0, 0)..(2, 0, 0))]);
+        index.add_deps("b", (1, 0, 0), &[("d", (1, 0, 0)..(1, 5, 0))]);
+        index.add_deps("c", (1, 0, 0), &[("d", (1, 5, 0)..(2, 0, 0))]);
+        index.add_deps::<R>("d", (1, 0, 0), &[]);
+        index.add_deps::<R>("d", (1, 5, 0), &[]);
+        assert!(resolve(&index, "a#1", (1, 0, 0)).is_err());
     }
 }
