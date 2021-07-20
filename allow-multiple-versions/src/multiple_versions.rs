@@ -72,20 +72,16 @@ impl Display for Bucket {
 impl Index {
     /// List existing versions for a given package with newest versions first.
     pub fn list_versions(&self, package: &Package) -> impl Iterator<Item = SemVer> + '_ {
-        eprintln!("list_versions({}):", package);
         match package {
             // If we are on a bucket, we need to filter versions
             // to only keep those within the bucket.
             Package::Bucket(p) => {
                 let bucket_range = Range::between((p.bucket, 0, 0), (p.bucket + 1, 0, 0));
-                // Either::Left(
-                let vs: Vec<_> = self
-                    .available_versions(&p.name)
-                    .filter(move |v| bucket_range.contains(*v))
-                    .cloned()
-                    .collect();
-                eprintln!("   {:?}", &vs[..]);
-                vs.into_iter()
+                Either::Left(
+                    self.available_versions(&p.name)
+                        .filter(move |v| bucket_range.contains(*v))
+                        .cloned(),
+                )
             }
             // If we are on a proxi, there is one version per bucket in the target package.
             // We can additionally filter versions to only those inside the dependency range.
@@ -98,15 +94,11 @@ impl Index {
                     .unwrap()
                     .get(target)
                     .unwrap();
-                // Either::Right(
-                let vs: Vec<_> = bucket_versions(
+                Either::Right(bucket_versions(
                     self.available_versions(&target)
                         .filter(move |v| dep_range.contains(v))
                         .cloned(),
-                )
-                .collect();
-                eprintln!("   {:?}", &vs[..]);
-                vs.into_iter()
+                ))
             }
         }
     }
@@ -150,12 +142,10 @@ impl DependencyProvider<Package, SemVer> for Index {
         package: &Package,
         version: &SemVer,
     ) -> Result<Dependencies<Package, SemVer>, Box<dyn std::error::Error>> {
-        eprintln!("get_dependencies({}, {}):", package, version);
         let all_versions = match self.packages.get(package.pkg_name()) {
             None => return Ok(Dependencies::Unknown),
             Some(all_versions) => all_versions,
         };
-        eprintln!("   found package: {}", package.pkg_name());
 
         match package {
             Package::Bucket(pkg) => {
@@ -166,7 +156,6 @@ impl DependencyProvider<Package, SemVer> for Index {
                     None => return Ok(Dependencies::Unknown),
                     Some(deps) => deps,
                 };
-                eprintln!("   found version: {}", version);
                 let pkg_deps = deps
                     .iter()
                     .map(|(name, range)| {
@@ -193,7 +182,6 @@ impl DependencyProvider<Package, SemVer> for Index {
                     None => return Ok(Dependencies::Unknown),
                     Some(deps) => deps,
                 };
-                eprintln!("   found version: {}", source.1);
                 let (target_bucket, _, _) = version.clone().into();
                 let bucket_range = Range::between((target_bucket, 0, 0), (target_bucket + 1, 0, 0));
                 let target_range = deps.get(target).unwrap();
@@ -205,7 +193,6 @@ impl DependencyProvider<Package, SemVer> for Index {
                     }),
                     bucket_range.intersection(target_range),
                 );
-                eprintln!("{:?}", &bucket_dep);
                 Ok(Dependencies::Known(bucket_dep))
             }
         }
