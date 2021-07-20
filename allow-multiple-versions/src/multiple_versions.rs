@@ -10,13 +10,13 @@ use pubgrub::type_aliases::Map;
 use pubgrub::version::SemanticVersion as SemVer;
 use std::str::FromStr;
 
-/// A package is either a bucket, or a proxi between two packages.
+/// A package is either a bucket, or a proxy between two packages.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum Package {
     /// "a#1"
     Bucket(Bucket),
     /// source -> target
-    Proxi {
+    Proxy {
         source: (Bucket, SemVer),
         target: String,
     },
@@ -34,7 +34,7 @@ impl Package {
     fn pkg_name(&self) -> &String {
         match self {
             Package::Bucket(b) => &b.name,
-            Package::Proxi { source, .. } => &source.0.name,
+            Package::Proxy { source, .. } => &source.0.name,
         }
     }
 }
@@ -58,7 +58,7 @@ impl Display for Package {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Package::Bucket(pkg) => write!(f, "{}", pkg),
-            Package::Proxi { source, target } => write!(f, "{}@{}->{}", source.0, source.1, target),
+            Package::Proxy { source, target } => write!(f, "{}@{}->{}", source.0, source.1, target),
         }
     }
 }
@@ -83,9 +83,9 @@ impl Index {
                         .cloned(),
                 )
             }
-            // If we are on a proxi, there is one version per bucket in the target package.
+            // If we are on a proxy, there is one version per bucket in the target package.
             // We can additionally filter versions to only those inside the dependency range.
-            Package::Proxi { target, source } => {
+            Package::Proxy { target, source } => {
                 let dep_range = self
                     .packages
                     .get(&source.0.name)
@@ -151,7 +151,7 @@ impl DependencyProvider<Package, SemVer> for Index {
             Package::Bucket(pkg) => {
                 // If this is a bucket, we convert each original dependency into
                 // either a dependency to a bucket package if the range is fully contained within one bucket,
-                // or a dependency to a proxi package at any version otherwise.
+                // or a dependency to a proxy package at any version otherwise.
                 let deps = match all_versions.get(version) {
                     None => return Ok(Dependencies::Unknown),
                     Some(deps) => deps,
@@ -164,18 +164,18 @@ impl DependencyProvider<Package, SemVer> for Index {
                             let bucket_dep = Bucket { name, bucket };
                             (Package::Bucket(bucket_dep), range.clone())
                         } else {
-                            let proxi = Package::Proxi {
+                            let proxy = Package::Proxy {
                                 source: (pkg.clone(), version.clone()),
                                 target: name.clone(),
                             };
-                            (proxi, Range::any())
+                            (proxy, Range::any())
                         }
                     })
                     .collect();
                 Ok(Dependencies::Known(pkg_deps))
             }
-            Package::Proxi { source, target } => {
-                // If this is a proxi package, it depends on a single bucket package, the target,
+            Package::Proxy { source, target } => {
+                // If this is a proxy package, it depends on a single bucket package, the target,
                 // at a range of versions corresponding to the bucket range of the version asked,
                 // intersected with the original dependency range.
                 let deps = match all_versions.get(&source.1) {
@@ -233,7 +233,7 @@ pub mod tests {
     ) -> Result<SelectedDependencies<Package, SemVer>, PubGrubError<Package, SemVer>> {
         let pkg = Package::from_str(pkg).unwrap();
         pubgrub::solver::resolve(provider, pkg, version).map(|solution| {
-            // remove proxi packages from the solution
+            // remove proxy packages from the solution
             solution
                 .into_iter()
                 .filter(|(pkg, _)| match pkg {
