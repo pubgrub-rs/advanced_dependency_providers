@@ -302,7 +302,7 @@ pub mod tests {
 
     #[test]
     /// "a" depends on "d"@1.1 and "d"@1.5 via "b" and "c" which is forbidden
-    fn error_when_same_bucket() {
+    fn fail_when_same_bucket() {
         let mut index = Index::new();
         index.add_deps("a", (1, 0, 0), &[("b", (1, 0, 0)..(2, 0, 0))]);
         index.add_deps("a", (1, 0, 0), &[("c", (1, 0, 0)..(2, 0, 0))]);
