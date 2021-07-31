@@ -1,5 +1,5 @@
 [package]
-name = "optional-deps"
+name = "allow-multiple-versions"
 version = "0.1.0"
 edition = "2018"
 license = "MPL-2.0"
@@ -8,3 +8,4 @@ license = "MPL-2.0"
 
 [dependencies]
 pubgrub = "0.2.1"
+itertools = "0.10.1"
