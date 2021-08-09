@@ -3,4 +3,5 @@ resolver = "2"
 members = [
   "optional-deps",
   "allow-multiple-versions",
+  "public-private",
 ]
