@@ -173,7 +173,7 @@ pub mod tests {
             h2
         );
         for (k, v) in h1.iter() {
-            assert_eq!(h2.get(k), Some(v));
+            assert_eq!(h2.get(k), Some(v), "different key: {:?}", k);
         }
     }
 
@@ -200,8 +200,8 @@ pub mod tests {
     }
 
     #[test]
-    /// Package "b" is required at two different versions through public dependency of "a"
-    fn failure_when_public_dependency_clash() {
+    /// Package "b" is required at two different versions through public dependency of "a".
+    fn fail_when_public_dependency_clash() {
         let mut index = Index::new();
         index.add_deps("root", (1, 0, 0), &[("a", Private, ..)]);
         index.add_deps("root", (1, 0, 0), &[("b", Private, (2, 0, 0)..(2, 0, 1))]);
@@ -211,5 +211,43 @@ pub mod tests {
         index.add_deps("b", (2, 0, 0), &[("c", Private, ..)]);
         index.add_deps::<R>("c", (1, 0, 0), &[]);
         assert!(resolve(&index, "root$root@1.0.0", (1, 0, 0)).is_err());
+    }
+
+    #[test]
+    /// Fork with two private then two public fails.
+    fn fail_when_fork_then_two_public() {
+        let mut index = Index::new();
+        index.add_deps("root", (1, 0, 0), &[("a", Private, ..)]);
+        index.add_deps("root", (1, 0, 0), &[("b", Private, ..)]);
+        // c is accessible at two different versions by the root
+        index.add_deps("a", (1, 0, 0), &[("c", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("b", (1, 0, 0), &[("c", Public, (2, 0, 0)..(2, 0, 1))]);
+        index.add_deps::<R>("c", (1, 0, 0), &[]);
+        index.add_deps::<R>("c", (2, 0, 0), &[]);
+        assert!(resolve(&index, "root$root@1.0.0", (1, 0, 0)).is_err());
+    }
+
+    #[test]
+    /// Fork with two private then one public succeeds.
+    fn success_when_fork_then_one_public() {
+        let mut index = Index::new();
+        index.add_deps("root", (1, 0, 0), &[("a", Private, ..)]);
+        index.add_deps("root", (1, 0, 0), &[("b", Private, ..)]);
+        // c 1.0.0 is not accessible from root anymore
+        // thanks to the private dependency "a"->"c"
+        index.add_deps("a", (1, 0, 0), &[("c", Private, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("b", (1, 0, 0), &[("c", Public, (2, 0, 0)..(2, 0, 1))]);
+        index.add_deps::<R>("c", (1, 0, 0), &[]);
+        index.add_deps::<R>("c", (2, 0, 0), &[]);
+        assert_map_eq(
+            &resolve(&index, "root$root@1.0.0", (1, 0, 0)).unwrap(),
+            &select(&[
+                ("root$root@1.0.0", (1, 0, 0)),
+                ("a$root@1.0.0", (1, 0, 0)),
+                ("b$root@1.0.0", (1, 0, 0)),
+                ("c$a@1.0.0", (1, 0, 0)),
+                ("c$root@1.0.0", (2, 0, 0)),
+            ]),
+        );
     }
 }

@@ -11,7 +11,7 @@ pub type PackageName = String;
 /// Alias for dependencies.
 pub type Deps = Map<PackageName, (Privacy, Range<SemVer>)>;
 /// Privacy indicates if a dependency is public or private.
-#[derive(Clone)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum Privacy {
     Public,
     Private,
