@@ -474,4 +474,44 @@ pub mod tests {
             ]),
         );
     }
+
+    #[test]
+    fn success_when_all_private_except_c_x() {
+        let mut index = Index::new();
+        index.add_deps("root", (1, 0, 0), &[("a", Private, ..)]);
+        index.add_deps("root", (1, 0, 0), &[("b", Private, ..)]);
+        index.add_deps("a", (1, 0, 0), &[("x", Private, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("a", (1, 0, 0), &[("c", Private, ..)]);
+        index.add_deps("b", (1, 0, 0), &[("x", Private, (2, 0, 0)..(2, 0, 1))]);
+        index.add_deps("b", (1, 0, 0), &[("c", Private, ..)]);
+        // Only c-x is public
+        index.add_deps("c", (1, 0, 0), &[("x", Public, ..)]);
+        index.add_deps::<R>("x", (1, 0, 0), &[]);
+        index.add_deps::<R>("x", (2, 0, 0), &[]);
+        let solution = resolve(&index, "root$root@1.0.0 seeded", (1, 0, 0));
+        assert_map_eq(
+            &solution.unwrap(),
+            &select(&[
+                ("root$root@1.0.0 final", (1, 0, 0)),
+                ("a$root@1.0.0 final", (1, 0, 0)),
+                ("b$root@1.0.0 final", (1, 0, 0)),
+                ("c$a@1.0.0 final", (1, 0, 0)),
+                ("c$b@1.0.0 final", (1, 0, 0)),
+                ("x$a@1.0.0 final", (1, 0, 0)),
+                ("x$b@1.0.0 final", (2, 0, 0)),
+            ]),
+        );
+        // match solution {
+        //     Ok(sol) => {
+        //         println!("{:?}", sol);
+        //         panic!("Should not have found a solution");
+        //     }
+        //     Err(PubGrubError::NoSolution(mut derivation_tree)) => {
+        //         derivation_tree.collapse_no_versions();
+        //         eprintln!("{}", DefaultStringReporter::report(&derivation_tree));
+        //         panic!("Panic just to see the failure report");
+        //     }
+        //     Err(err) => panic!("{:?}", err),
+        // };
+    }
 }
