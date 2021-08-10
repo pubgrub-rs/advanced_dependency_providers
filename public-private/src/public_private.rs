@@ -288,4 +288,190 @@ pub mod tests {
         let solution = resolve(&index, "root$root@1.0.0 seeded", (1, 0, 0));
         assert!(solution.is_err());
     }
+
+    #[test]
+    fn success_when_after_double_private_fork() {
+        let mut index = Index::new();
+        index.add_deps("root", (1, 0, 0), &[("a", Public, (1, 0, 0)..(1, 0, 1))]);
+        // "a" depends on "b" and "c" privately.
+        index.add_deps("a", (1, 0, 0), &[("b", Private, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("a", (1, 0, 0), &[("c", Private, (1, 0, 0)..(1, 0, 1))]);
+        // "b" and "c" depend on two different versions of d.
+        index.add_deps("b", (1, 0, 0), &[("d", Private, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("c", (1, 0, 0), &[("d", Private, (2, 0, 0)..(2, 0, 1))]);
+        index.add_deps::<R>("d", (1, 0, 0), &[]);
+        index.add_deps::<R>("d", (2, 0, 0), &[]);
+        let solution = resolve(&index, "root$root@1.0.0 seeded", (1, 0, 0));
+        assert_map_eq(
+            &solution.unwrap(),
+            &select(&[
+                ("root$root@1.0.0 final", (1, 0, 0)),
+                ("a$root@1.0.0 final", (1, 0, 0)),
+                ("b$a@1.0.0 final", (1, 0, 0)),
+                ("c$a@1.0.0 final", (1, 0, 0)),
+                ("d$b@1.0.0 final", (1, 0, 0)),
+                ("d$c@1.0.0 final", (2, 0, 0)),
+            ]),
+        );
+    }
+
+    #[test]
+    fn failure_when_after_single_private_fork() {
+        let mut index = Index::new();
+        index.add_deps("root", (1, 0, 0), &[("a", Public, (1, 0, 0)..(1, 0, 1))]);
+        // "a" depends on "b" and "c" privately.
+        index.add_deps("a", (1, 0, 0), &[("b", Private, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("a", (1, 0, 0), &[("c", Private, (1, 0, 0)..(1, 0, 1))]);
+        // "b" and "c" depend on two different versions of d.
+        index.add_deps("b", (1, 0, 0), &[("d", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("c", (1, 0, 0), &[("d", Public, (2, 0, 0)..(2, 0, 1))]);
+        index.add_deps::<R>("d", (1, 0, 0), &[]);
+        index.add_deps::<R>("d", (2, 0, 0), &[]);
+        let solution = resolve(&index, "root$root@1.0.0 seeded", (1, 0, 0));
+        assert!(solution.is_err());
+    }
+
+    #[test]
+    fn success_when_after_single_private_fork_if_same_version() {
+        let mut index = Index::new();
+        index.add_deps("root", (1, 0, 0), &[("a", Public, (1, 0, 0)..(1, 0, 1))]);
+        // "a" depends on "b" and "c" privately.
+        index.add_deps("a", (1, 0, 0), &[("b", Private, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("a", (1, 0, 0), &[("c", Private, (1, 0, 0)..(1, 0, 1))]);
+        // "b" and "c" depend on two different versions of d.
+        index.add_deps("b", (1, 0, 0), &[("d", Public, ..)]);
+        index.add_deps("c", (1, 0, 0), &[("d", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps::<R>("d", (1, 0, 0), &[]);
+        index.add_deps::<R>("d", (2, 0, 0), &[]);
+        let solution = resolve(&index, "root$root@1.0.0 seeded", (1, 0, 0));
+        assert_map_eq(
+            &solution.unwrap(),
+            &select(&[
+                ("root$root@1.0.0 final", (1, 0, 0)),
+                ("a$root@1.0.0 final", (1, 0, 0)),
+                ("b$a@1.0.0 final", (1, 0, 0)),
+                ("c$a@1.0.0 final", (1, 0, 0)),
+                ("d$a@1.0.0 final", (1, 0, 0)),
+            ]),
+        );
+    }
+
+    #[test]
+    fn failure_after_long_chain() {
+        let mut index = Index::new();
+        // long public chain root-a-b-c-d
+        index.add_deps("root", (1, 0, 0), &[("a", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("a", (1, 0, 0), &[("b", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("b", (1, 0, 0), &[("c", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("c", (1, 0, 0), &[("d", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps::<R>("d", (1, 0, 0), &[]);
+        // private branches at a, b, and c
+        index.add_deps("a", (1, 0, 0), &[("e", Private, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("b", (1, 0, 0), &[("f", Private, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("c", (1, 0, 0), &[("g", Private, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps::<R>("f", (1, 0, 0), &[]);
+        index.add_deps::<R>("g", (1, 0, 0), &[]);
+        // long public chain from a-e to another version of d
+        index.add_deps("e", (1, 0, 0), &[("h", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("h", (1, 0, 0), &[("i", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("i", (1, 0, 0), &[("d", Public, (2, 0, 0)..(2, 0, 1))]);
+        index.add_deps::<R>("h", (1, 0, 0), &[]);
+        index.add_deps::<R>("i", (1, 0, 0), &[]);
+        index.add_deps::<R>("d", (2, 0, 0), &[]);
+        let solution = resolve(&index, "root$root@1.0.0 seeded", (1, 0, 0));
+        assert!(solution.is_err());
+    }
+
+    #[test]
+    fn success_after_long_chain_with_one_private_on_main() {
+        let mut index = Index::new();
+        // long public chain root-a-b-c-d
+        index.add_deps("root", (1, 0, 0), &[("a", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("a", (1, 0, 0), &[("b", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("b", (1, 0, 0), &[("c", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("c", (1, 0, 0), &[("d", Private, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps::<R>("d", (1, 0, 0), &[]);
+        // private branches at a, b, and c
+        index.add_deps("a", (1, 0, 0), &[("e", Private, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("b", (1, 0, 0), &[("f", Private, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("c", (1, 0, 0), &[("g", Private, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps::<R>("f", (1, 0, 0), &[]);
+        index.add_deps::<R>("g", (1, 0, 0), &[]);
+        // long public chain from a-e to another version of d
+        index.add_deps("e", (1, 0, 0), &[("h", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("h", (1, 0, 0), &[("i", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("i", (1, 0, 0), &[("d", Public, (2, 0, 0)..(2, 0, 1))]);
+        index.add_deps::<R>("h", (1, 0, 0), &[]);
+        index.add_deps::<R>("i", (1, 0, 0), &[]);
+        index.add_deps::<R>("d", (2, 0, 0), &[]);
+        let solution = resolve(&index, "root$root@1.0.0 seeded", (1, 0, 0));
+        assert_map_eq(
+            &solution.unwrap(),
+            &select(&[
+                ("root$root@1.0.0 final", (1, 0, 0)),
+                ("a$root@1.0.0 final", (1, 0, 0)),
+                ("b$root@1.0.0 final", (1, 0, 0)),
+                ("b$a@1.0.0 final", (1, 0, 0)), // hum ...
+                ("c$root@1.0.0 final", (1, 0, 0)),
+                ("c$a@1.0.0 final", (1, 0, 0)), // hum ...
+                ("c$b@1.0.0 final", (1, 0, 0)), // hum ...
+                ("d$c@1.0.0 final", (1, 0, 0)),
+                ("e$a@1.0.0 final", (1, 0, 0)),
+                ("f$b@1.0.0 final", (1, 0, 0)),
+                ("g$c@1.0.0 final", (1, 0, 0)),
+                ("h$a@1.0.0 final", (1, 0, 0)),
+                ("i$a@1.0.0 final", (1, 0, 0)),
+                // d @ 2 coming from a @ 1
+                ("d$a@1.0.0 final", (2, 0, 0)),
+            ]),
+        );
+    }
+
+    #[test]
+    fn success_after_long_chain_with_one_private_on_other() {
+        let mut index = Index::new();
+        // long public chain root-a-b-c-d
+        index.add_deps("root", (1, 0, 0), &[("a", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("a", (1, 0, 0), &[("b", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("b", (1, 0, 0), &[("c", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("c", (1, 0, 0), &[("d", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps::<R>("d", (1, 0, 0), &[]);
+        // private branches at a, b, and c
+        index.add_deps("a", (1, 0, 0), &[("e", Private, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("b", (1, 0, 0), &[("f", Private, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("c", (1, 0, 0), &[("g", Private, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps::<R>("f", (1, 0, 0), &[]);
+        index.add_deps::<R>("g", (1, 0, 0), &[]);
+        // long public chain from a-e to another version of d
+        index.add_deps("e", (1, 0, 0), &[("h", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("h", (1, 0, 0), &[("i", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("i", (1, 0, 0), &[("d", Private, (2, 0, 0)..(2, 0, 1))]);
+        index.add_deps::<R>("h", (1, 0, 0), &[]);
+        index.add_deps::<R>("i", (1, 0, 0), &[]);
+        index.add_deps::<R>("d", (2, 0, 0), &[]);
+        let solution = resolve(&index, "root$root@1.0.0 seeded", (1, 0, 0));
+        assert_map_eq(
+            &solution.unwrap(),
+            &select(&[
+                ("root$root@1.0.0 final", (1, 0, 0)),
+                ("a$root@1.0.0 final", (1, 0, 0)),
+                ("b$root@1.0.0 final", (1, 0, 0)),
+                ("b$a@1.0.0 final", (1, 0, 0)), // hum ...
+                ("c$root@1.0.0 final", (1, 0, 0)),
+                ("c$a@1.0.0 final", (1, 0, 0)), // hum ...
+                ("c$b@1.0.0 final", (1, 0, 0)), // hum ...
+                ("d$root@1.0.0 final", (1, 0, 0)),
+                ("d$a@1.0.0 final", (1, 0, 0)), // hum ...
+                ("d$b@1.0.0 final", (1, 0, 0)), // hum ...
+                ("d$c@1.0.0 final", (1, 0, 0)), // hum ...
+                ("e$a@1.0.0 final", (1, 0, 0)),
+                ("f$b@1.0.0 final", (1, 0, 0)),
+                ("g$c@1.0.0 final", (1, 0, 0)),
+                ("h$a@1.0.0 final", (1, 0, 0)),
+                ("i$a@1.0.0 final", (1, 0, 0)),
+                // d @ 2 coming from i @ 1
+                ("d$i@1.0.0 final", (2, 0, 0)),
+            ]),
+        );
+    }
 }
