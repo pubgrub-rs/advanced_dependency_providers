@@ -5,20 +5,25 @@ use core::borrow::Borrow;
 use core::fmt::Display;
 use pubgrub::range::Range;
 use pubgrub::solver::{Dependencies, DependencyProvider};
+use pubgrub::type_aliases::Map;
 use pubgrub::version::SemanticVersion as SemVer;
+use std::collections::BTreeSet as Set;
 use std::str::FromStr;
 
-/// A package is identified by its name, and has a private seed.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Package {
-    /// Package identifier
-    pub name: String,
-    /// Seed, the identifier of the current public subgraph
-    pub seed: Seed,
+    name: String,
+    seeds: SeededPkg,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum SeededPkg {
+    Final(Seed),
+    Multi(Set<Seed>),
 }
 
 /// A seed is the identifier associated with the private package at the origin of a public subgraph
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub struct Seed {
     /// Seed package identifier
     pub name: String,
@@ -26,9 +31,30 @@ pub struct Seed {
     pub version: SemVer,
 }
 
+impl SeededPkg {
+    pub fn is_final(&self) -> bool {
+        match self {
+            Self::Final(_) => true,
+            _ => false,
+        }
+    }
+}
+
 impl Display for Package {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}${}", self.name, self.seed)
+        write!(f, "{}${}", self.name, self.seeds)
+    }
+}
+
+impl Display for SeededPkg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Final(seed) => write!(f, "{} final", seed),
+            Self::Multi(seeds) => {
+                let all_seeds: Vec<_> = seeds.iter().map(|s| s.to_string()).collect();
+                write!(f, "{} seeded", all_seeds.join("$"))
+            }
+        }
     }
 }
 
@@ -44,10 +70,27 @@ impl FromStr for Package {
     fn from_str(pkg: &str) -> Result<Self, Self::Err> {
         let mut pkg_parts = pkg.split('$');
         match (pkg_parts.next(), pkg_parts.next()) {
-            (Some(name), Some(seed)) => Ok(Package {
+            (Some(name), Some(seeds)) => Ok(Package {
                 name: name.to_string(),
-                seed: seed.parse().unwrap(),
+                seeds: seeds.parse().unwrap(),
             }),
+            _ => Err(format!("{} is not a valid package name", pkg)),
+        }
+    }
+}
+
+impl FromStr for SeededPkg {
+    type Err = String;
+    /// "root@1.0.0 final" -> Final package "a" with seed "root" at version 1.0.0
+    fn from_str(pkg: &str) -> Result<Self, Self::Err> {
+        let mut pkg_parts = pkg.split(' ');
+        match (pkg_parts.next(), pkg_parts.next()) {
+            (Some(seed), Some("final")) => Ok(Self::Final(seed.parse().unwrap())),
+            (Some(seed), Some("seeded")) => {
+                let mut seeds = Set::default();
+                seeds.insert(seed.parse().unwrap());
+                Ok(Self::Multi(seeds))
+            }
             _ => Err(format!("{} is not a valid package name", pkg)),
         }
     }
@@ -91,43 +134,70 @@ impl DependencyProvider<Package, SemVer> for Index {
         package: &Package,
         version: &SemVer,
     ) -> Result<Dependencies<Package, SemVer>, Box<dyn std::error::Error>> {
-        let index_deps = match self
-            .packages
-            .get(&package.name)
-            .and_then(|vs| vs.get(version))
-        {
-            None => return Ok(Dependencies::Unknown),
-            Some(deps) => deps,
-        };
-        Ok(Dependencies::Known(
-            index_deps
-                .iter()
-                .map(|(pkg, (prv, r))| {
-                    match prv {
-                        // For a public dependency, use the parent seed.
-                        Privacy::Public => {
-                            let dep_pkg = Package {
-                                name: pkg.clone(),
-                                seed: package.seed.clone(),
+        match &package.seeds {
+            SeededPkg::Final(_) => Ok(Dependencies::Known(Map::default())),
+            SeededPkg::Multi(seeds) => {
+                let index_deps = match self
+                    .packages
+                    .get(&package.name)
+                    .and_then(|vs| vs.get(version))
+                {
+                    None => return Ok(Dependencies::Unknown),
+                    Some(deps) => deps,
+                };
+                // Start an iterator with final seeds
+                let seeded_pkg = |seed: &Seed| Package {
+                    name: package.name.clone(),
+                    seeds: SeededPkg::Final(seed.clone()),
+                };
+                let final_seeded = seeds
+                    .iter()
+                    .map(|s| (seeded_pkg(s), Range::exact(version.clone())));
+                // Figure out if there are both private and public deps.
+                let has_private = index_deps
+                    .values()
+                    .any(|(privacy, _)| privacy == &Privacy::Private);
+                let has_public = index_deps
+                    .values()
+                    .any(|(privacy, _)| privacy == &Privacy::Public);
+                // Compute the new set of seeds if there is a need.
+                let new_seeds = if has_private && has_public {
+                    let mut seeds_copy = seeds.clone();
+                    seeds_copy.insert(Seed {
+                        name: package.name.clone(),
+                        version: version.clone(),
+                    });
+                    seeds_copy
+                } else {
+                    seeds.clone()
+                };
+                // Chain the final_seeded iterator with actual dependencies.
+                let singleton = |s| {
+                    let mut s_set = Set::default();
+                    s_set.insert(s);
+                    s_set
+                };
+                Ok(Dependencies::Known(
+                    final_seeded
+                        .chain(index_deps.iter().map(|(p, (privacy, r))| {
+                            let p_seeds = if privacy == &Privacy::Private {
+                                SeededPkg::Multi(singleton(Seed {
+                                    name: package.name.clone(),
+                                    version: version.clone(),
+                                }))
+                            } else {
+                                SeededPkg::Multi(new_seeds.clone())
                             };
-                            (dep_pkg, r.clone())
-                        }
-                        // For a private dependency, use current package as seed.
-                        Privacy::Private => {
-                            let seed = Seed {
-                                name: package.name.clone(),
-                                version: version.clone(),
+                            let dep_p = Package {
+                                name: p.clone(),
+                                seeds: p_seeds,
                             };
-                            let dep_pkg = Package {
-                                name: pkg.clone(),
-                                seed,
-                            };
-                            (dep_pkg, r.clone())
-                        }
-                    }
-                })
-                .collect(),
-        ))
+                            (dep_p, r.clone())
+                        }))
+                        .collect(),
+                ))
+            }
+        }
     }
 }
 
@@ -139,6 +209,7 @@ pub mod tests {
     use crate::index::Privacy::{Private, Public};
     use core::fmt::Debug;
     use pubgrub::error::PubGrubError;
+    // use pubgrub::report::{DefaultStringReporter, Reporter};
     use pubgrub::type_aliases::{Map, SelectedDependencies};
     type R = core::ops::RangeFull;
 
@@ -149,7 +220,12 @@ pub mod tests {
         version: (u32, u32, u32),
     ) -> Result<SelectedDependencies<Package, SemVer>, PubGrubError<Package, SemVer>> {
         let pkg = Package::from_str(pkg).unwrap();
-        pubgrub::solver::resolve(provider, pkg, version)
+        pubgrub::solver::resolve(provider, pkg, version).map(|solution| {
+            solution
+                .into_iter()
+                .filter(|(p, _)| p.seeds.is_final())
+                .collect()
+        })
     }
 
     /// Helper function to build a solution selection.
@@ -173,7 +249,7 @@ pub mod tests {
             h2
         );
         for (k, v) in h1.iter() {
-            assert_eq!(h2.get(k), Some(v), "different key: {:?}", k);
+            assert_eq!(h2.get(k), Some(v));
         }
     }
 
@@ -181,73 +257,35 @@ pub mod tests {
     /// Example in guide.
     fn success_when_all_is_private() {
         let mut index = Index::new();
-        index.add_deps("root", (1, 0, 0), &[("a", Private, ..)]);
-        index.add_deps("root", (1, 0, 0), &[("b", Private, (2, 0, 0)..(2, 0, 1))]);
-        index.add_deps("a", (1, 0, 0), &[("b", Private, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("root", (1, 0, 0), &[("a", Private, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("root", (1, 0, 0), &[("b", Private, (1, 0, 0)..(1, 0, 1))]);
+        // "a" depends on "b" privately.
+        index.add_deps("a", (1, 0, 0), &[("b", Private, (2, 0, 0)..(2, 0, 1))]);
         index.add_deps::<R>("b", (1, 0, 0), &[]);
-        index.add_deps("b", (2, 0, 0), &[("c", Private, ..)]);
-        index.add_deps::<R>("c", (1, 0, 0), &[]);
+        index.add_deps::<R>("b", (2, 0, 0), &[]);
+        let solution = resolve(&index, "root$root@1.0.0 seeded", (1, 0, 0));
         assert_map_eq(
-            &resolve(&index, "root$root@1.0.0", (1, 0, 0)).unwrap(),
+            &solution.unwrap(),
             &select(&[
-                ("root$root@1.0.0", (1, 0, 0)),
-                ("a$root@1.0.0", (1, 0, 0)),
-                ("b$root@1.0.0", (2, 0, 0)),
-                ("b$a@1.0.0", (1, 0, 0)),
-                ("c$b@2.0.0", (1, 0, 0)),
+                ("root$root@1.0.0 final", (1, 0, 0)),
+                ("a$root@1.0.0 final", (1, 0, 0)),
+                ("b$root@1.0.0 final", (1, 0, 0)),
+                ("b$a@1.0.0 final", (2, 0, 0)),
             ]),
         );
     }
 
     #[test]
-    /// Package "b" is required at two different versions through public dependency of "a".
-    fn fail_when_public_dependency_clash() {
+    /// Package "b" is required at two different versions through public dependency of "a"
+    fn failure_when_public_dependency_clash() {
         let mut index = Index::new();
-        index.add_deps("root", (1, 0, 0), &[("a", Private, ..)]);
-        index.add_deps("root", (1, 0, 0), &[("b", Private, (2, 0, 0)..(2, 0, 1))]);
+        index.add_deps("root", (1, 0, 0), &[("a", Private, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("root", (1, 0, 0), &[("b", Private, (1, 0, 0)..(1, 0, 1))]);
         // "a" depends on "b" publicly.
-        index.add_deps("a", (1, 0, 0), &[("b", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("a", (1, 0, 0), &[("b", Public, (2, 0, 0)..(2, 0, 1))]);
         index.add_deps::<R>("b", (1, 0, 0), &[]);
-        index.add_deps("b", (2, 0, 0), &[("c", Private, ..)]);
-        index.add_deps::<R>("c", (1, 0, 0), &[]);
-        assert!(resolve(&index, "root$root@1.0.0", (1, 0, 0)).is_err());
-    }
-
-    #[test]
-    /// Fork with two private then two public fails.
-    fn fail_when_fork_then_two_public() {
-        let mut index = Index::new();
-        index.add_deps("root", (1, 0, 0), &[("a", Private, ..)]);
-        index.add_deps("root", (1, 0, 0), &[("b", Private, ..)]);
-        // c is accessible at two different versions by the root
-        index.add_deps("a", (1, 0, 0), &[("c", Public, (1, 0, 0)..(1, 0, 1))]);
-        index.add_deps("b", (1, 0, 0), &[("c", Public, (2, 0, 0)..(2, 0, 1))]);
-        index.add_deps::<R>("c", (1, 0, 0), &[]);
-        index.add_deps::<R>("c", (2, 0, 0), &[]);
-        assert!(resolve(&index, "root$root@1.0.0", (1, 0, 0)).is_err());
-    }
-
-    #[test]
-    /// Fork with two private then one public succeeds.
-    fn success_when_fork_then_one_public() {
-        let mut index = Index::new();
-        index.add_deps("root", (1, 0, 0), &[("a", Private, ..)]);
-        index.add_deps("root", (1, 0, 0), &[("b", Private, ..)]);
-        // c 1.0.0 is not accessible from root anymore
-        // thanks to the private dependency "a"->"c"
-        index.add_deps("a", (1, 0, 0), &[("c", Private, (1, 0, 0)..(1, 0, 1))]);
-        index.add_deps("b", (1, 0, 0), &[("c", Public, (2, 0, 0)..(2, 0, 1))]);
-        index.add_deps::<R>("c", (1, 0, 0), &[]);
-        index.add_deps::<R>("c", (2, 0, 0), &[]);
-        assert_map_eq(
-            &resolve(&index, "root$root@1.0.0", (1, 0, 0)).unwrap(),
-            &select(&[
-                ("root$root@1.0.0", (1, 0, 0)),
-                ("a$root@1.0.0", (1, 0, 0)),
-                ("b$root@1.0.0", (1, 0, 0)),
-                ("c$a@1.0.0", (1, 0, 0)),
-                ("c$root@1.0.0", (2, 0, 0)),
-            ]),
-        );
+        index.add_deps::<R>("b", (2, 0, 0), &[]);
+        let solution = resolve(&index, "root$root@1.0.0 seeded", (1, 0, 0));
+        assert!(solution.is_err());
     }
 }
