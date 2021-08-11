@@ -13,13 +13,13 @@ use std::str::FromStr;
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Package {
     name: String,
-    seeds: SeededPkg,
+    seeds: PkgSeeds,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub enum SeededPkg {
-    Final(Seed),
-    Multi(Set<Seed>),
+pub enum PkgSeeds {
+    Constraint(Seed),
+    Markers(Set<Seed>),
 }
 
 /// A seed is the identifier associated with the private package at the origin of a public subgraph
@@ -31,10 +31,10 @@ pub struct Seed {
     pub version: SemVer,
 }
 
-impl SeededPkg {
+impl PkgSeeds {
     pub fn is_final(&self) -> bool {
         match self {
-            Self::Final(_) => true,
+            Self::Constraint(_) => true,
             _ => false,
         }
     }
@@ -46,11 +46,11 @@ impl Display for Package {
     }
 }
 
-impl Display for SeededPkg {
+impl Display for PkgSeeds {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Final(seed) => write!(f, "{} final", seed),
-            Self::Multi(seeds) => {
+            Self::Constraint(seed) => write!(f, "{} final", seed),
+            Self::Markers(seeds) => {
                 let all_seeds: Vec<_> = seeds.iter().map(|s| s.to_string()).collect();
                 write!(f, "{} seeded", all_seeds.join("$"))
             }
@@ -79,17 +79,17 @@ impl FromStr for Package {
     }
 }
 
-impl FromStr for SeededPkg {
+impl FromStr for PkgSeeds {
     type Err = String;
     /// "root@1.0.0 final" -> Final package "a" with seed "root" at version 1.0.0
     fn from_str(pkg: &str) -> Result<Self, Self::Err> {
         let mut pkg_parts = pkg.split(' ');
         match (pkg_parts.next(), pkg_parts.next()) {
-            (Some(seed), Some("final")) => Ok(Self::Final(seed.parse().unwrap())),
+            (Some(seed), Some("final")) => Ok(Self::Constraint(seed.parse().unwrap())),
             (Some(seed), Some("seeded")) => {
                 let mut seeds = Set::default();
                 seeds.insert(seed.parse().unwrap());
-                Ok(Self::Multi(seeds))
+                Ok(Self::Markers(seeds))
             }
             _ => Err(format!("{} is not a valid package name", pkg)),
         }
@@ -135,8 +135,8 @@ impl DependencyProvider<Package, SemVer> for Index {
         version: &SemVer,
     ) -> Result<Dependencies<Package, SemVer>, Box<dyn std::error::Error>> {
         match &package.seeds {
-            SeededPkg::Final(_) => Ok(Dependencies::Known(Map::default())),
-            SeededPkg::Multi(seeds) => {
+            PkgSeeds::Constraint(_) => Ok(Dependencies::Known(Map::default())),
+            PkgSeeds::Markers(seeds) => {
                 let index_deps = match self
                     .packages
                     .get(&package.name)
@@ -148,7 +148,7 @@ impl DependencyProvider<Package, SemVer> for Index {
                 // Start an iterator with final seeds
                 let seeded_pkg = |seed: &Seed| Package {
                     name: package.name.clone(),
-                    seeds: SeededPkg::Final(seed.clone()),
+                    seeds: PkgSeeds::Constraint(seed.clone()),
                 };
                 let final_seeded = seeds
                     .iter()
@@ -181,12 +181,12 @@ impl DependencyProvider<Package, SemVer> for Index {
                     final_seeded
                         .chain(index_deps.iter().map(|(p, (privacy, r))| {
                             let p_seeds = if privacy == &Privacy::Private {
-                                SeededPkg::Multi(singleton(Seed {
+                                PkgSeeds::Markers(singleton(Seed {
                                     name: package.name.clone(),
                                     version: version.clone(),
                                 }))
                             } else {
-                                SeededPkg::Multi(new_seeds.clone())
+                                PkgSeeds::Markers(new_seeds.clone())
                             };
                             let dep_p = Package {
                                 name: p.clone(),
