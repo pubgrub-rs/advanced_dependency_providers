@@ -3,6 +3,7 @@
 use crate::index::{Index, Privacy};
 use core::borrow::Borrow;
 use core::fmt::Display;
+use itertools::Either;
 use pubgrub::range::Range;
 use pubgrub::solver::{Dependencies, DependencyProvider};
 use pubgrub::type_aliases::Map;
@@ -168,7 +169,21 @@ impl DependencyProvider<Package, SemVer> for Index {
                 // Chain the final_seeded iterator with actual dependencies.
                 Ok(Dependencies::Known(
                     seed_constraints
-                        .chain(index_deps.iter().map(|(p, (privacy, r))| {
+                        .chain(index_deps.iter().flat_map(|(p, (privacy, r))| {
+                            if pkgs.contains(p) {
+                                // If the dependency is already in the seed markers,
+                                // we simply add the constraints for that dependency
+                                // since we don't have a version choice anymore due to the marker.
+                                return Either::Left(new_markers.iter().map(move |s| {
+                                    (
+                                        Package {
+                                            name: p.clone(),
+                                            seeds: PkgSeeds::Constraint(s.clone()),
+                                        },
+                                        r.clone(),
+                                    )
+                                }));
+                            }
                             let p_seeds = if privacy == &Privacy::Private {
                                 PkgSeeds::Markers {
                                     seed_markers: singleton(Seed {
@@ -187,7 +202,7 @@ impl DependencyProvider<Package, SemVer> for Index {
                                 name: p.clone(),
                                 seeds: p_seeds,
                             };
-                            (dep_p, r.clone())
+                            Either::Right(std::iter::once((dep_p, r.clone())))
                         }))
                         .collect(),
                 ))
