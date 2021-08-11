@@ -19,7 +19,10 @@ pub struct Package {
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum PkgSeeds {
     Constraint(Seed),
-    Markers(Set<Seed>),
+    Markers {
+        seed_markers: Set<Seed>,
+        pkgs: Set<String>,
+    },
 }
 
 /// A seed is the identifier associated with the private package at the origin of a public subgraph
@@ -34,7 +37,7 @@ pub struct Seed {
 impl PkgSeeds {
     pub fn is_markers(&self) -> bool {
         match self {
-            Self::Markers(_) => true,
+            Self::Markers { .. } => true,
             _ => false,
         }
     }
@@ -50,8 +53,8 @@ impl Display for PkgSeeds {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Constraint(seed) => write!(f, "{} constraint", seed),
-            Self::Markers(seeds) => {
-                let all_seeds: Vec<_> = seeds.iter().map(|s| s.to_string()).collect();
+            Self::Markers { seed_markers, .. } => {
+                let all_seeds: Vec<_> = seed_markers.iter().map(|s| s.to_string()).collect();
                 write!(f, "{}", all_seeds.join("$"))
             }
         }
@@ -82,9 +85,9 @@ impl FromStr for PkgSeeds {
     type Err = String;
     /// "root@1.0.0" -> Seed "root" at version 1.0.0
     fn from_str(seeds: &str) -> Result<Self, Self::Err> {
-        Ok(Self::Markers(
-            seeds.split('$').map(|s| s.parse().unwrap()).collect(),
-        ))
+        let seed_markers: Set<Seed> = seeds.split('$').map(|s| s.parse().unwrap()).collect();
+        let pkgs = seed_markers.iter().map(|s| s.name.clone()).collect();
+        Ok(Self::Markers { seed_markers, pkgs })
     }
 }
 
@@ -128,7 +131,7 @@ impl DependencyProvider<Package, SemVer> for Index {
     ) -> Result<Dependencies<Package, SemVer>, Box<dyn std::error::Error>> {
         match &package.seeds {
             PkgSeeds::Constraint(_) => Ok(Dependencies::Known(Map::default())),
-            PkgSeeds::Markers(seed_markers) => {
+            PkgSeeds::Markers { seed_markers, pkgs } => {
                 let index_deps = match self
                     .packages
                     .get(&package.name)
@@ -153,32 +156,32 @@ impl DependencyProvider<Package, SemVer> for Index {
                     .values()
                     .any(|(privacy, _)| privacy == &Privacy::Public);
                 // Compute the new set of seeds if there is a need.
-                let new_markers = if has_private && has_public {
-                    let mut seeds_copy = seed_markers.clone();
-                    seeds_copy.insert(Seed {
+                let mut new_markers = seed_markers.clone();
+                let mut new_pkgs = pkgs.clone();
+                if has_private && has_public {
+                    new_markers.insert(Seed {
                         name: package.name.clone(),
                         version: version.clone(),
                     });
-                    seeds_copy
-                } else {
-                    seed_markers.clone()
-                };
+                    new_pkgs.insert(package.name.clone());
+                }
                 // Chain the final_seeded iterator with actual dependencies.
-                let singleton = |s| {
-                    let mut s_set = Set::default();
-                    s_set.insert(s);
-                    s_set
-                };
                 Ok(Dependencies::Known(
                     seed_constraints
                         .chain(index_deps.iter().map(|(p, (privacy, r))| {
                             let p_seeds = if privacy == &Privacy::Private {
-                                PkgSeeds::Markers(singleton(Seed {
-                                    name: package.name.clone(),
-                                    version: version.clone(),
-                                }))
+                                PkgSeeds::Markers {
+                                    seed_markers: singleton(Seed {
+                                        name: package.name.clone(),
+                                        version: version.clone(),
+                                    }),
+                                    pkgs: singleton(package.name.clone()),
+                                }
                             } else {
-                                PkgSeeds::Markers(new_markers.clone())
+                                PkgSeeds::Markers {
+                                    seed_markers: new_markers.clone(),
+                                    pkgs: new_pkgs.clone(),
+                                }
                             };
                             let dep_p = Package {
                                 name: p.clone(),
@@ -191,6 +194,12 @@ impl DependencyProvider<Package, SemVer> for Index {
             }
         }
     }
+}
+
+fn singleton<T: Ord>(s: T) -> Set<T> {
+    let mut s_set = Set::default();
+    s_set.insert(s);
+    s_set
 }
 
 // TESTS #######################################################################
