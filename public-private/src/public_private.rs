@@ -68,9 +68,8 @@ impl FromStr for Package {
     type Err = String;
     /// "a$root@1.0.0" -> Package "a" with seed "root" at version 1.0.0
     fn from_str(pkg: &str) -> Result<Self, Self::Err> {
-        let mut pkg_parts = pkg.split('$');
-        match (pkg_parts.next(), pkg_parts.next()) {
-            (Some(name), Some(seeds)) => Ok(Package {
+        match pkg.split_once('$') {
+            Some((name, seeds)) => Ok(Package {
                 name: name.to_string(),
                 seeds: seeds.parse().unwrap(),
             }),
@@ -129,7 +128,7 @@ impl DependencyProvider<Package, SemVer> for Index {
     ) -> Result<Dependencies<Package, SemVer>, Box<dyn std::error::Error>> {
         match &package.seeds {
             PkgSeeds::Constraint(_) => Ok(Dependencies::Known(Map::default())),
-            PkgSeeds::Markers(seeds) => {
+            PkgSeeds::Markers(seed_markers) => {
                 let index_deps = match self
                     .packages
                     .get(&package.name)
@@ -143,7 +142,7 @@ impl DependencyProvider<Package, SemVer> for Index {
                     name: package.name.clone(),
                     seeds: PkgSeeds::Constraint(seed.clone()),
                 };
-                let final_seeded = seeds
+                let seed_constraints = seed_markers
                     .iter()
                     .map(|s| (seeded_pkg(s), Range::exact(version.clone())));
                 // Figure out if there are both private and public deps.
@@ -154,15 +153,15 @@ impl DependencyProvider<Package, SemVer> for Index {
                     .values()
                     .any(|(privacy, _)| privacy == &Privacy::Public);
                 // Compute the new set of seeds if there is a need.
-                let new_seeds = if has_private && has_public {
-                    let mut seeds_copy = seeds.clone();
+                let new_markers = if has_private && has_public {
+                    let mut seeds_copy = seed_markers.clone();
                     seeds_copy.insert(Seed {
                         name: package.name.clone(),
                         version: version.clone(),
                     });
                     seeds_copy
                 } else {
-                    seeds.clone()
+                    seed_markers.clone()
                 };
                 // Chain the final_seeded iterator with actual dependencies.
                 let singleton = |s| {
@@ -171,7 +170,7 @@ impl DependencyProvider<Package, SemVer> for Index {
                     s_set
                 };
                 Ok(Dependencies::Known(
-                    final_seeded
+                    seed_constraints
                         .chain(index_deps.iter().map(|(p, (privacy, r))| {
                             let p_seeds = if privacy == &Privacy::Private {
                                 PkgSeeds::Markers(singleton(Seed {
@@ -179,7 +178,7 @@ impl DependencyProvider<Package, SemVer> for Index {
                                     version: version.clone(),
                                 }))
                             } else {
-                                PkgSeeds::Markers(new_seeds.clone())
+                                PkgSeeds::Markers(new_markers.clone())
                             };
                             let dep_p = Package {
                                 name: p.clone(),
@@ -503,15 +502,9 @@ pub mod tests {
             &select(&[
                 ("root$root@1.0.0", (1, 0, 0)),
                 ("a$root@1.0.0", (1, 0, 0)),
-                ("b$root@1.0.0", (1, 0, 0)),
-                ("b$a@1.0.0", (1, 0, 0)), // hum ...
-                ("c$root@1.0.0", (1, 0, 0)),
-                ("c$a@1.0.0", (1, 0, 0)), // hum ...
-                ("c$b@1.0.0", (1, 0, 0)), // hum ...
-                ("d$root@1.0.0", (1, 0, 0)),
-                ("d$a@1.0.0", (1, 0, 0)), // hum ...
-                ("d$b@1.0.0", (1, 0, 0)), // hum ...
-                ("d$c@1.0.0", (1, 0, 0)), // hum ...
+                ("b$root@1.0.0$a@1.0.0", (1, 0, 0)),
+                ("c$root@1.0.0$a@1.0.0$b@1.0.0", (1, 0, 0)),
+                ("d$root@1.0.0$a@1.0.0$b@1.0.0$c@1.0.0", (1, 0, 0)),
                 ("e$a@1.0.0", (1, 0, 0)),
                 ("f$b@1.0.0", (1, 0, 0)),
                 ("g$c@1.0.0", (1, 0, 0)),
