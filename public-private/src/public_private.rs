@@ -199,10 +199,9 @@ impl DependencyProvider<Package, SemVer> for Index {
 pub mod tests {
     use super::*;
     use crate::index::Privacy::{Private, Public};
-    use core::fmt::Debug;
     use pubgrub::error::PubGrubError;
     // use pubgrub::report::{DefaultStringReporter, Reporter};
-    use pubgrub::type_aliases::{Map, SelectedDependencies};
+    use pubgrub::type_aliases::SelectedDependencies;
     type R = core::ops::RangeFull;
 
     /// Helper function to simplify the tests code.
@@ -236,15 +235,15 @@ pub mod tests {
         assert_eq!(
             h1.len(),
             h2.len(),
-            "Different length:\n\n{:?}\n\n{:?}",
-            h1,
-            h2
+            "Different length:\n\n{}\n\n{}\n",
+            solution_str(h1),
+            solution_str(h2)
         );
         for (k, v) in h1.iter() {
             assert_eq!(
                 h2.get(k),
                 Some(v),
-                "Left:\n{}\n\nRight:\n{}",
+                "Left:\n{}\n\nRight:\n{}\n",
                 solution_str(h1),
                 solution_str(h2)
             );
@@ -564,5 +563,45 @@ pub mod tests {
         //     }
         //     Err(err) => panic!("{:?}", err),
         // };
+    }
+
+    #[test]
+    /// r===a---b---a
+    ///
+    /// Cycle with packages a and b.
+    fn success_when_cycle() {
+        let mut index = Index::new();
+        index.add_deps("root", (1, 0, 0), &[("a", Private, ..)]);
+        index.add_deps("a", (1, 0, 0), &[("b", Public, ..)]);
+        index.add_deps("b", (1, 0, 0), &[("a", Public, ..)]);
+        let solution = resolve(&index, "root$root@1.0.0", (1, 0, 0));
+        assert_map_eq(
+            &solution.unwrap(),
+            &select(&[
+                ("root$root@1.0.0", (1, 0, 0)),
+                ("a$root@1.0.0", (1, 0, 0)),
+                ("b$root@1.0.0", (1, 0, 0)),
+            ]),
+        );
+    }
+
+    #[test]
+    /// r===a===b---a
+    ///
+    /// Cycle with packages a and b with a private link.
+    fn success_when_cycle_and_private_link() {
+        let mut index = Index::new();
+        index.add_deps("root", (1, 0, 0), &[("a", Private, ..)]);
+        index.add_deps("a", (1, 0, 0), &[("b", Private, ..)]);
+        index.add_deps("b", (1, 0, 0), &[("a", Public, ..)]);
+        let solution = resolve(&index, "root$root@1.0.0", (1, 0, 0));
+        assert_map_eq(
+            &solution.unwrap(),
+            &select(&[
+                ("root$root@1.0.0", (1, 0, 0)),
+                ("a$root@1.0.0", (1, 0, 0)),
+                ("b$a@1.0.0", (1, 0, 0)),
+            ]),
+        );
     }
 }
