@@ -32,9 +32,9 @@ pub struct Seed {
 }
 
 impl PkgSeeds {
-    pub fn is_final(&self) -> bool {
+    pub fn is_markers(&self) -> bool {
         match self {
-            Self::Constraint(_) => true,
+            Self::Markers(_) => true,
             _ => false,
         }
     }
@@ -49,10 +49,10 @@ impl Display for Package {
 impl Display for PkgSeeds {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Constraint(seed) => write!(f, "{} final", seed),
+            Self::Constraint(seed) => write!(f, "{} constraint", seed),
             Self::Markers(seeds) => {
                 let all_seeds: Vec<_> = seeds.iter().map(|s| s.to_string()).collect();
-                write!(f, "{} seeded", all_seeds.join("$"))
+                write!(f, "{}", all_seeds.join("$"))
             }
         }
     }
@@ -81,18 +81,11 @@ impl FromStr for Package {
 
 impl FromStr for PkgSeeds {
     type Err = String;
-    /// "root@1.0.0 final" -> Final package "a" with seed "root" at version 1.0.0
-    fn from_str(pkg: &str) -> Result<Self, Self::Err> {
-        let mut pkg_parts = pkg.split(' ');
-        match (pkg_parts.next(), pkg_parts.next()) {
-            (Some(seed), Some("final")) => Ok(Self::Constraint(seed.parse().unwrap())),
-            (Some(seed), Some("seeded")) => {
-                let mut seeds = Set::default();
-                seeds.insert(seed.parse().unwrap());
-                Ok(Self::Markers(seeds))
-            }
-            _ => Err(format!("{} is not a valid package name", pkg)),
-        }
+    /// "root@1.0.0" -> Seed "root" at version 1.0.0
+    fn from_str(seeds: &str) -> Result<Self, Self::Err> {
+        Ok(Self::Markers(
+            seeds.split('$').map(|s| s.parse().unwrap()).collect(),
+        ))
     }
 }
 
@@ -145,7 +138,7 @@ impl DependencyProvider<Package, SemVer> for Index {
                     None => return Ok(Dependencies::Unknown),
                     Some(deps) => deps,
                 };
-                // Start an iterator with final seeds
+                // Start an iterator with seed constraints
                 let seeded_pkg = |seed: &Seed| Package {
                     name: package.name.clone(),
                     seeds: PkgSeeds::Constraint(seed.clone()),
@@ -223,7 +216,7 @@ pub mod tests {
         pubgrub::solver::resolve(provider, pkg, version).map(|solution| {
             solution
                 .into_iter()
-                .filter(|(p, _)| p.seeds.is_final())
+                .filter(|(p, _)| p.seeds.is_markers())
                 .collect()
         })
     }
@@ -237,9 +230,9 @@ pub mod tests {
     }
 
     /// Helper function to compare a solution to an exact selection of package versions.
-    fn assert_map_eq<K: Eq + std::hash::Hash + Debug, V: PartialEq + Debug>(
-        h1: &Map<K, V>,
-        h2: &Map<K, V>,
+    fn assert_map_eq(
+        h1: &SelectedDependencies<Package, SemVer>,
+        h2: &SelectedDependencies<Package, SemVer>,
     ) {
         assert_eq!(
             h1.len(),
@@ -249,12 +242,29 @@ pub mod tests {
             h2
         );
         for (k, v) in h1.iter() {
-            assert_eq!(h2.get(k), Some(v));
+            assert_eq!(
+                h2.get(k),
+                Some(v),
+                "Left:\n{}\n\nRight:\n{}",
+                solution_str(h1),
+                solution_str(h2)
+            );
         }
+    }
+
+    fn solution_str(sol: &SelectedDependencies<Package, SemVer>) -> String {
+        let deps: Vec<String> = sol
+            .iter()
+            .map(|(p, v)| format!("{}  @  {}", p, v))
+            .collect();
+        deps.join("\n")
     }
 
     #[test]
     /// Example in guide.
+    /// r===a1===b2
+    ///  \
+    ///   ==b1
     fn success_when_all_is_private() {
         let mut index = Index::new();
         index.add_deps("root", (1, 0, 0), &[("a", Private, (1, 0, 0)..(1, 0, 1))]);
@@ -263,20 +273,23 @@ pub mod tests {
         index.add_deps("a", (1, 0, 0), &[("b", Private, (2, 0, 0)..(2, 0, 1))]);
         index.add_deps::<R>("b", (1, 0, 0), &[]);
         index.add_deps::<R>("b", (2, 0, 0), &[]);
-        let solution = resolve(&index, "root$root@1.0.0 seeded", (1, 0, 0));
+        let solution = resolve(&index, "root$root@1.0.0", (1, 0, 0));
         assert_map_eq(
             &solution.unwrap(),
             &select(&[
-                ("root$root@1.0.0 final", (1, 0, 0)),
-                ("a$root@1.0.0 final", (1, 0, 0)),
-                ("b$root@1.0.0 final", (1, 0, 0)),
-                ("b$a@1.0.0 final", (2, 0, 0)),
+                ("root$root@1.0.0", (1, 0, 0)),
+                ("a$root@1.0.0", (1, 0, 0)),
+                ("b$root@1.0.0", (1, 0, 0)),
+                ("b$a@1.0.0", (2, 0, 0)),
             ]),
         );
     }
 
     #[test]
     /// Package "b" is required at two different versions through public dependency of "a"
+    /// r===a1---b2
+    ///  \
+    ///   ==b1
     fn failure_when_public_dependency_clash() {
         let mut index = Index::new();
         index.add_deps("root", (1, 0, 0), &[("a", Private, (1, 0, 0)..(1, 0, 1))]);
@@ -285,11 +298,14 @@ pub mod tests {
         index.add_deps("a", (1, 0, 0), &[("b", Public, (2, 0, 0)..(2, 0, 1))]);
         index.add_deps::<R>("b", (1, 0, 0), &[]);
         index.add_deps::<R>("b", (2, 0, 0), &[]);
-        let solution = resolve(&index, "root$root@1.0.0 seeded", (1, 0, 0));
+        let solution = resolve(&index, "root$root@1.0.0", (1, 0, 0));
         assert!(solution.is_err());
     }
 
     #[test]
+    ///         ==b1===d1
+    /// r---a1<
+    ///         ==c1===d2
     fn success_when_after_double_private_fork() {
         let mut index = Index::new();
         index.add_deps("root", (1, 0, 0), &[("a", Public, (1, 0, 0)..(1, 0, 1))]);
@@ -301,21 +317,24 @@ pub mod tests {
         index.add_deps("c", (1, 0, 0), &[("d", Private, (2, 0, 0)..(2, 0, 1))]);
         index.add_deps::<R>("d", (1, 0, 0), &[]);
         index.add_deps::<R>("d", (2, 0, 0), &[]);
-        let solution = resolve(&index, "root$root@1.0.0 seeded", (1, 0, 0));
+        let solution = resolve(&index, "root$root@1.0.0", (1, 0, 0));
         assert_map_eq(
             &solution.unwrap(),
             &select(&[
-                ("root$root@1.0.0 final", (1, 0, 0)),
-                ("a$root@1.0.0 final", (1, 0, 0)),
-                ("b$a@1.0.0 final", (1, 0, 0)),
-                ("c$a@1.0.0 final", (1, 0, 0)),
-                ("d$b@1.0.0 final", (1, 0, 0)),
-                ("d$c@1.0.0 final", (2, 0, 0)),
+                ("root$root@1.0.0", (1, 0, 0)),
+                ("a$root@1.0.0", (1, 0, 0)),
+                ("b$a@1.0.0", (1, 0, 0)),
+                ("c$a@1.0.0", (1, 0, 0)),
+                ("d$b@1.0.0", (1, 0, 0)),
+                ("d$c@1.0.0", (2, 0, 0)),
             ]),
         );
     }
 
     #[test]
+    ///         ==b1---d1
+    /// r---a1<
+    ///         ==c1---d2
     fn failure_when_after_single_private_fork() {
         let mut index = Index::new();
         index.add_deps("root", (1, 0, 0), &[("a", Public, (1, 0, 0)..(1, 0, 1))]);
@@ -327,11 +346,14 @@ pub mod tests {
         index.add_deps("c", (1, 0, 0), &[("d", Public, (2, 0, 0)..(2, 0, 1))]);
         index.add_deps::<R>("d", (1, 0, 0), &[]);
         index.add_deps::<R>("d", (2, 0, 0), &[]);
-        let solution = resolve(&index, "root$root@1.0.0 seeded", (1, 0, 0));
+        let solution = resolve(&index, "root$root@1.0.0", (1, 0, 0));
         assert!(solution.is_err());
     }
 
     #[test]
+    ///         ==b1---d*
+    /// r---a1<
+    ///         ==c1---d1
     fn success_when_after_single_private_fork_if_same_version() {
         let mut index = Index::new();
         index.add_deps("root", (1, 0, 0), &[("a", Public, (1, 0, 0)..(1, 0, 1))]);
@@ -343,20 +365,29 @@ pub mod tests {
         index.add_deps("c", (1, 0, 0), &[("d", Public, (1, 0, 0)..(1, 0, 1))]);
         index.add_deps::<R>("d", (1, 0, 0), &[]);
         index.add_deps::<R>("d", (2, 0, 0), &[]);
-        let solution = resolve(&index, "root$root@1.0.0 seeded", (1, 0, 0));
+        let solution = resolve(&index, "root$root@1.0.0", (1, 0, 0));
         assert_map_eq(
             &solution.unwrap(),
             &select(&[
-                ("root$root@1.0.0 final", (1, 0, 0)),
-                ("a$root@1.0.0 final", (1, 0, 0)),
-                ("b$a@1.0.0 final", (1, 0, 0)),
-                ("c$a@1.0.0 final", (1, 0, 0)),
-                ("d$a@1.0.0 final", (1, 0, 0)),
+                ("root$root@1.0.0", (1, 0, 0)),
+                ("a$root@1.0.0", (1, 0, 0)),
+                ("b$a@1.0.0", (1, 0, 0)),
+                ("c$a@1.0.0", (1, 0, 0)),
+                ("d$a@1.0.0", (1, 0, 0)),
             ]),
         );
     }
 
     #[test]
+    ///            ==f1
+    ///           /
+    /// r---a1---b1---c1---d1
+    ///      \         \
+    ///       ==e1      ==g1
+    ///          \
+    ///           --h1---i1---d2
+    ///
+    /// d is required both at version 1 and 2.
     fn failure_after_long_chain() {
         let mut index = Index::new();
         // long public chain root-a-b-c-d
@@ -378,11 +409,21 @@ pub mod tests {
         index.add_deps::<R>("h", (1, 0, 0), &[]);
         index.add_deps::<R>("i", (1, 0, 0), &[]);
         index.add_deps::<R>("d", (2, 0, 0), &[]);
-        let solution = resolve(&index, "root$root@1.0.0 seeded", (1, 0, 0));
+        let solution = resolve(&index, "root$root@1.0.0", (1, 0, 0));
         assert!(solution.is_err());
     }
 
     #[test]
+    ///            ==f1
+    ///           /
+    /// r---a1---b1---c1===d1
+    ///      \         \
+    ///       ==e1      ==g1
+    ///          \
+    ///           --h1---i1---d2
+    ///
+    /// d is required both at version 1 and 2
+    /// but behind private deps.
     fn success_after_long_chain_with_one_private_on_main() {
         let mut index = Index::new();
         // long public chain root-a-b-c-d
@@ -404,30 +445,37 @@ pub mod tests {
         index.add_deps::<R>("h", (1, 0, 0), &[]);
         index.add_deps::<R>("i", (1, 0, 0), &[]);
         index.add_deps::<R>("d", (2, 0, 0), &[]);
-        let solution = resolve(&index, "root$root@1.0.0 seeded", (1, 0, 0));
+        let solution = resolve(&index, "root$root@1.0.0", (1, 0, 0));
         assert_map_eq(
             &solution.unwrap(),
             &select(&[
-                ("root$root@1.0.0 final", (1, 0, 0)),
-                ("a$root@1.0.0 final", (1, 0, 0)),
-                ("b$root@1.0.0 final", (1, 0, 0)),
-                ("b$a@1.0.0 final", (1, 0, 0)), // hum ...
-                ("c$root@1.0.0 final", (1, 0, 0)),
-                ("c$a@1.0.0 final", (1, 0, 0)), // hum ...
-                ("c$b@1.0.0 final", (1, 0, 0)), // hum ...
-                ("d$c@1.0.0 final", (1, 0, 0)),
-                ("e$a@1.0.0 final", (1, 0, 0)),
-                ("f$b@1.0.0 final", (1, 0, 0)),
-                ("g$c@1.0.0 final", (1, 0, 0)),
-                ("h$a@1.0.0 final", (1, 0, 0)),
-                ("i$a@1.0.0 final", (1, 0, 0)),
+                ("root$root@1.0.0", (1, 0, 0)),
+                ("a$root@1.0.0", (1, 0, 0)),
+                ("b$root@1.0.0$a@1.0.0", (1, 0, 0)),
+                ("c$root@1.0.0$a@1.0.0$b@1.0.0", (1, 0, 0)),
+                ("d$c@1.0.0", (1, 0, 0)),
+                ("e$a@1.0.0", (1, 0, 0)),
+                ("f$b@1.0.0", (1, 0, 0)),
+                ("g$c@1.0.0", (1, 0, 0)),
+                ("h$a@1.0.0", (1, 0, 0)),
+                ("i$a@1.0.0", (1, 0, 0)),
                 // d @ 2 coming from a @ 1
-                ("d$a@1.0.0 final", (2, 0, 0)),
+                ("d$a@1.0.0", (2, 0, 0)),
             ]),
         );
     }
 
     #[test]
+    ///            ==f1
+    ///           /
+    /// r---a1---b1---c1---d1
+    ///      \         \
+    ///       ==e1      ==g1
+    ///          \
+    ///           --h1---i1===d2
+    ///
+    /// d is required both at version 1 and 2
+    /// but d2 is behind 2 private links.
     fn success_after_long_chain_with_one_private_on_other() {
         let mut index = Index::new();
         // long public chain root-a-b-c-d
@@ -449,33 +497,43 @@ pub mod tests {
         index.add_deps::<R>("h", (1, 0, 0), &[]);
         index.add_deps::<R>("i", (1, 0, 0), &[]);
         index.add_deps::<R>("d", (2, 0, 0), &[]);
-        let solution = resolve(&index, "root$root@1.0.0 seeded", (1, 0, 0));
+        let solution = resolve(&index, "root$root@1.0.0", (1, 0, 0));
         assert_map_eq(
             &solution.unwrap(),
             &select(&[
-                ("root$root@1.0.0 final", (1, 0, 0)),
-                ("a$root@1.0.0 final", (1, 0, 0)),
-                ("b$root@1.0.0 final", (1, 0, 0)),
-                ("b$a@1.0.0 final", (1, 0, 0)), // hum ...
-                ("c$root@1.0.0 final", (1, 0, 0)),
-                ("c$a@1.0.0 final", (1, 0, 0)), // hum ...
-                ("c$b@1.0.0 final", (1, 0, 0)), // hum ...
-                ("d$root@1.0.0 final", (1, 0, 0)),
-                ("d$a@1.0.0 final", (1, 0, 0)), // hum ...
-                ("d$b@1.0.0 final", (1, 0, 0)), // hum ...
-                ("d$c@1.0.0 final", (1, 0, 0)), // hum ...
-                ("e$a@1.0.0 final", (1, 0, 0)),
-                ("f$b@1.0.0 final", (1, 0, 0)),
-                ("g$c@1.0.0 final", (1, 0, 0)),
-                ("h$a@1.0.0 final", (1, 0, 0)),
-                ("i$a@1.0.0 final", (1, 0, 0)),
+                ("root$root@1.0.0", (1, 0, 0)),
+                ("a$root@1.0.0", (1, 0, 0)),
+                ("b$root@1.0.0", (1, 0, 0)),
+                ("b$a@1.0.0", (1, 0, 0)), // hum ...
+                ("c$root@1.0.0", (1, 0, 0)),
+                ("c$a@1.0.0", (1, 0, 0)), // hum ...
+                ("c$b@1.0.0", (1, 0, 0)), // hum ...
+                ("d$root@1.0.0", (1, 0, 0)),
+                ("d$a@1.0.0", (1, 0, 0)), // hum ...
+                ("d$b@1.0.0", (1, 0, 0)), // hum ...
+                ("d$c@1.0.0", (1, 0, 0)), // hum ...
+                ("e$a@1.0.0", (1, 0, 0)),
+                ("f$b@1.0.0", (1, 0, 0)),
+                ("g$c@1.0.0", (1, 0, 0)),
+                ("h$a@1.0.0", (1, 0, 0)),
+                ("i$a@1.0.0", (1, 0, 0)),
                 // d @ 2 coming from i @ 1
-                ("d$i@1.0.0 final", (2, 0, 0)),
+                ("d$i@1.0.0", (2, 0, 0)),
             ]),
         );
     }
 
     #[test]
+    ///       ==x1
+    ///      /
+    ///   ==a1===c1---x*
+    /// r<
+    ///   ==b1===c1---x*
+    ///      \
+    ///       ==x2
+    ///
+    /// x is required at v1 and v2 behind private deps of a and b.
+    /// x is also a public dep of c, which is required both by a and b.
     fn success_when_all_private_except_c_x() {
         let mut index = Index::new();
         index.add_deps("root", (1, 0, 0), &[("a", Private, ..)]);
@@ -488,17 +546,17 @@ pub mod tests {
         index.add_deps("c", (1, 0, 0), &[("x", Public, ..)]);
         index.add_deps::<R>("x", (1, 0, 0), &[]);
         index.add_deps::<R>("x", (2, 0, 0), &[]);
-        let solution = resolve(&index, "root$root@1.0.0 seeded", (1, 0, 0));
+        let solution = resolve(&index, "root$root@1.0.0", (1, 0, 0));
         assert_map_eq(
             &solution.unwrap(),
             &select(&[
-                ("root$root@1.0.0 final", (1, 0, 0)),
-                ("a$root@1.0.0 final", (1, 0, 0)),
-                ("b$root@1.0.0 final", (1, 0, 0)),
-                ("c$a@1.0.0 final", (1, 0, 0)),
-                ("c$b@1.0.0 final", (1, 0, 0)),
-                ("x$a@1.0.0 final", (1, 0, 0)),
-                ("x$b@1.0.0 final", (2, 0, 0)),
+                ("root$root@1.0.0", (1, 0, 0)),
+                ("a$root@1.0.0", (1, 0, 0)),
+                ("b$root@1.0.0", (1, 0, 0)),
+                ("c$a@1.0.0", (1, 0, 0)),
+                ("c$b@1.0.0", (1, 0, 0)),
+                ("x$a@1.0.0", (1, 0, 0)),
+                ("x$b@1.0.0", (2, 0, 0)),
             ]),
         );
         // match solution {
