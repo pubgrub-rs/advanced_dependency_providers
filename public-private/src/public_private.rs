@@ -628,4 +628,25 @@ pub mod tests {
             ]),
         );
     }
+
+    #[test]
+    /// r===a---b===a
+    ///
+    /// Cycle with packages a and b with a private link.
+    fn success_when_cycle_and_private_link_bis() {
+        let mut index = Index::new();
+        index.add_deps("root", (1, 0, 0), &[("a", Private, ..)]);
+        index.add_deps("a", (1, 0, 0), &[("b", Public, ..)]);
+        index.add_deps("b", (1, 0, 0), &[("a", Private, ..)]);
+        let solution = resolve(&index, "root$root@1.0.0", (1, 0, 0));
+        assert_map_eq(
+            &solution.unwrap(),
+            &select(&[
+                ("root$root@1.0.0", (1, 0, 0)),
+                ("a$root@1.0.0", (1, 0, 0)),
+                ("b$root@1.0.0", (1, 0, 0)),
+                ("a$b@1.0.0", (1, 0, 0)),
+            ]),
+        );
+    }
 }
