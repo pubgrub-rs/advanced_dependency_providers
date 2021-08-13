@@ -11,12 +11,21 @@ use pubgrub::version::SemanticVersion as SemVer;
 use std::collections::BTreeSet as Set;
 use std::str::FromStr;
 
+/// A package is identified by its name and by the public subgraphs
+/// it belongs to, themselves identified by "seeds".
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Package {
     name: String,
     seeds: PkgSeeds,
 }
 
+/// Each public subgraph is identified by a seed,
+/// and some packages belong to multiple public subgraphs
+/// and can thus have multiple seed markers.
+/// Since we also need to have a unique hash per package, per public subgraph,
+/// Each `Markers` variant of a package will also have a dependency on
+/// one `Constraint` variant per seed, resulting in one unique identifier
+/// per public subgraph that PubGrub can use to check consraints on versions.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum PkgSeeds {
     Constraint(Seed),
@@ -26,7 +35,8 @@ pub enum PkgSeeds {
     },
 }
 
-/// A seed is the identifier associated with the private package at the origin of a public subgraph
+/// A seed is the identifier associated with the private package
+/// at the origin of a public subgraph.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub struct Seed {
     /// Seed package identifier
