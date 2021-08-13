@@ -25,7 +25,7 @@ pub struct Package {
 /// Since we also need to have a unique hash per package, per public subgraph,
 /// Each `Markers` variant of a package will also have a dependency on
 /// one `Constraint` variant per seed, resulting in one unique identifier
-/// per public subgraph that PubGrub can use to check consraints on versions.
+/// per public subgraph that PubGrub can use to check constraints on versions.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum PkgSeeds {
     Constraint(Seed),
