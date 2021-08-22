@@ -659,4 +659,84 @@ pub mod tests {
             ]),
         );
     }
+
+    #[test]
+    ///       --f --f
+    ///      /   /
+    ///   --b===d---x1
+    /// a<
+    ///   --c===e---x2
+    ///      \   \
+    ///       --f --f
+    ///
+    fn ericson_succeeds() {
+        let mut index = Index::new();
+        index.add_deps("a", (1, 0, 0), &[("b", Public, ..)]);
+        index.add_deps("a", (1, 0, 0), &[("c", Public, ..)]);
+        index.add_deps("b", (1, 0, 0), &[("d", Private, ..)]);
+        index.add_deps("b", (1, 0, 0), &[("f", Public, ..)]);
+        index.add_deps("c", (1, 0, 0), &[("e", Private, ..)]);
+        index.add_deps("c", (1, 0, 0), &[("f", Public, ..)]);
+        index.add_deps("d", (1, 0, 0), &[("x", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("d", (1, 0, 0), &[("f", Public, ..)]);
+        index.add_deps("e", (1, 0, 0), &[("x", Public, (2, 0, 0)..(2, 0, 1))]);
+        index.add_deps("e", (1, 0, 0), &[("f", Public, ..)]);
+        index.add_deps::<R>("f", (1, 0, 0), &[]);
+        index.add_deps::<R>("x", (1, 0, 0), &[]);
+        index.add_deps::<R>("x", (2, 0, 0), &[]);
+        let solution = resolve(&index, "a$a@1.0.0", (1, 0, 0));
+        assert_map_eq(
+            &solution.unwrap(),
+            &select(&[
+                ("a$a@1.0.0", (1, 0, 0)),
+                ("b$a@1.0.0", (1, 0, 0)),
+                ("c$a@1.0.0", (1, 0, 0)),
+                ("d$b@1.0.0", (1, 0, 0)),
+                ("e$c@1.0.0", (1, 0, 0)),
+                ("x$b@1.0.0", (1, 0, 0)),
+                ("x$c@1.0.0", (2, 0, 0)),
+                ("f$b@1.0.0", (1, 0, 0)),
+                ("f$c@1.0.0", (1, 0, 0)),
+                ("f$a@1.0.0$b@1.0.0", (1, 0, 0)),
+                ("f$a@1.0.0$c@1.0.0", (1, 0, 0)),
+            ]),
+        );
+    }
+
+    #[test]
+    ///       --f*   --f1
+    ///      /      /
+    ///   --b======d
+    /// a<
+    ///   --c======e
+    ///      \      \
+    ///       --f*   --f2
+    ///
+    fn ericson_fails() {
+        let mut index = Index::new();
+        index.add_deps("a", (1, 0, 0), &[("b", Public, ..)]);
+        index.add_deps("a", (1, 0, 0), &[("c", Public, ..)]);
+        index.add_deps("b", (1, 0, 0), &[("d", Private, ..)]);
+        index.add_deps("b", (1, 0, 0), &[("f", Public, ..)]);
+        index.add_deps("c", (1, 0, 0), &[("e", Private, ..)]);
+        index.add_deps("c", (1, 0, 0), &[("f", Public, ..)]);
+        index.add_deps("d", (1, 0, 0), &[("f", Public, (1, 0, 0)..(1, 0, 1))]);
+        index.add_deps("e", (1, 0, 0), &[("f", Public, (2, 0, 0)..(2, 0, 1))]);
+        index.add_deps::<R>("f", (1, 0, 0), &[]);
+        index.add_deps::<R>("f", (2, 0, 0), &[]);
+        let solution = resolve(&index, "a$a@1.0.0", (1, 0, 0));
+        assert!(solution.is_err());
+        // match solution {
+        //     Ok(sol) => {
+        //         println!("{:?}", sol);
+        //         panic!("Should not have found a solution");
+        //     }
+        //     Err(PubGrubError::NoSolution(mut derivation_tree)) => {
+        //         derivation_tree.collapse_no_versions();
+        //         eprintln!("{}", DefaultStringReporter::report(&derivation_tree));
+        //         panic!("Panic just to see the failure report");
+        //     }
+        //     Err(err) => panic!("{:?}", err),
+        // };
+    }
 }
