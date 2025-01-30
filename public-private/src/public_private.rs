@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::index::{Index, Privacy};
-use core::borrow::Borrow;
 use core::fmt::Display;
 use itertools::Either;
-use pubgrub::range::Range;
-use pubgrub::solver::{Dependencies, DependencyProvider};
-use pubgrub::type_aliases::Map;
-use pubgrub::version::SemanticVersion as SemVer;
+use pubgrub::Map;
+use pubgrub::Range;
+use pubgrub::SemanticVersion as SemVer;
+use pubgrub::{Dependencies, DependencyProvider};
 use std::collections::BTreeSet as Set;
+use std::convert::Infallible;
 use std::str::FromStr;
 
 /// A package is identified by its name and by the public subgraphs
@@ -124,31 +124,53 @@ impl Index {
     }
 }
 
-impl DependencyProvider<Package, SemVer> for Index {
-    fn choose_package_version<T: Borrow<Package>, U: Borrow<Range<SemVer>>>(
+impl DependencyProvider for Index {
+    type P = Package;
+
+    type V = SemVer;
+
+    type VS = Range<SemVer>;
+
+    type M = String;
+
+    fn prioritize(
         &self,
-        potential_packages: impl Iterator<Item = (T, U)>,
-    ) -> Result<(T, Option<SemVer>), Box<dyn std::error::Error>> {
-        Ok(pubgrub::solver::choose_package_with_fewest_versions(
-            |p| self.list_versions(p),
-            potential_packages,
-        ))
+        _package: &Self::P,
+        _range: &Self::VS,
+        _package_conflicts_counts: &pubgrub::PackageResolutionStatistics,
+    ) -> Self::Priority {
+        1
+    }
+
+    type Priority = u8;
+
+    type Err = Infallible;
+
+    fn choose_version(
+        &self,
+        package: &Self::P,
+        range: &Self::VS,
+    ) -> Result<Option<Self::V>, Self::Err> {
+        Ok(self
+            .list_versions(package)
+            .filter(|v| range.contains(v))
+            .next())
     }
 
     fn get_dependencies(
         &self,
         package: &Package,
         version: &SemVer,
-    ) -> Result<Dependencies<Package, SemVer>, Box<dyn std::error::Error>> {
+    ) -> Result<Dependencies<Package, Self::VS, Self::M>, Self::Err> {
         match &package.seeds {
-            PkgSeeds::Constraint(_) => Ok(Dependencies::Known(Map::default())),
+            PkgSeeds::Constraint(_) => Ok(Dependencies::Available(Map::default())),
             PkgSeeds::Markers { seed_markers, pkgs } => {
                 let index_deps = match self
                     .packages
                     .get(&package.name)
                     .and_then(|vs| vs.get(version))
                 {
-                    None => return Ok(Dependencies::Unknown),
+                    None => return Ok(Dependencies::Unavailable("".into())),
                     Some(deps) => deps,
                 };
                 // Start an iterator with seed constraints
@@ -158,7 +180,7 @@ impl DependencyProvider<Package, SemVer> for Index {
                 };
                 let seed_constraints = seed_markers
                     .iter()
-                    .map(|s| (seeded_pkg(s), Range::exact(version.clone())));
+                    .map(|s| (seeded_pkg(s), Range::singleton(version.clone())));
                 // Figure out if there are both private and public deps.
                 let has_private = index_deps
                     .values()
@@ -177,7 +199,7 @@ impl DependencyProvider<Package, SemVer> for Index {
                     new_pkgs.insert(package.name.clone());
                 }
                 // Chain the final_seeded iterator with actual dependencies.
-                Ok(Dependencies::Known(
+                Ok(Dependencies::Available(
                     seed_constraints
                         .chain(index_deps.iter().flat_map(|(p, (privacy, r))| {
                             if pkgs.contains(p) {
@@ -233,19 +255,19 @@ fn singleton<T: Ord>(s: T) -> Set<T> {
 pub mod tests {
     use super::*;
     use crate::index::Privacy::{Private, Public};
-    use pubgrub::error::PubGrubError;
+    use pubgrub::PubGrubError;
     // use pubgrub::report::{DefaultStringReporter, Reporter};
-    use pubgrub::type_aliases::SelectedDependencies;
+    use pubgrub::SelectedDependencies;
     type R = core::ops::RangeFull;
 
     /// Helper function to simplify the tests code.
     fn resolve(
-        provider: &impl DependencyProvider<Package, SemVer>,
+        provider: &Index,
         pkg: &str,
         version: (u32, u32, u32),
-    ) -> Result<SelectedDependencies<Package, SemVer>, PubGrubError<Package, SemVer>> {
+    ) -> Result<SelectedDependencies<Index>, PubGrubError<Index>> {
         let pkg = Package::from_str(pkg).unwrap();
-        pubgrub::solver::resolve(provider, pkg, version).map(|solution| {
+        pubgrub::resolve(provider, pkg, version).map(|solution| {
             solution
                 .into_iter()
                 .filter(|(p, _)| p.seeds.is_markers())
@@ -254,7 +276,7 @@ pub mod tests {
     }
 
     /// Helper function to build a solution selection.
-    fn select(packages: &[(&str, (u32, u32, u32))]) -> SelectedDependencies<Package, SemVer> {
+    fn select(packages: &[(&str, (u32, u32, u32))]) -> SelectedDependencies<Index> {
         packages
             .iter()
             .map(|(p, v)| (Package::from_str(p).unwrap(), SemVer::from(*v)))
@@ -262,10 +284,7 @@ pub mod tests {
     }
 
     /// Helper function to compare a solution to an exact selection of package versions.
-    fn assert_map_eq(
-        h1: &SelectedDependencies<Package, SemVer>,
-        h2: &SelectedDependencies<Package, SemVer>,
-    ) {
+    fn assert_map_eq(h1: &SelectedDependencies<Index>, h2: &SelectedDependencies<Index>) {
         assert_eq!(
             h1.len(),
             h2.len(),
@@ -284,7 +303,7 @@ pub mod tests {
         }
     }
 
-    fn solution_str(sol: &SelectedDependencies<Package, SemVer>) -> String {
+    fn solution_str(sol: &SelectedDependencies<Index>) -> String {
         let deps: Vec<String> = sol
             .iter()
             .map(|(p, v)| format!("{}  @  {}", p, v))

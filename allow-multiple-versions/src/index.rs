@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use core::ops::{Bound, RangeBounds};
-use pubgrub::range::Range;
-use pubgrub::type_aliases::Map;
-use pubgrub::version::SemanticVersion as SemVer;
+use pubgrub::Range;
+use pubgrub::Map;
+use pubgrub::SemanticVersion as SemVer;
 use std::collections::BTreeMap;
 
 /// Each package is identified by its name.
@@ -56,7 +56,7 @@ impl Index {
 /// Convert a range bounds into pubgrub Range type.
 fn range_from_bounds<R: RangeBounds<(u32, u32, u32)>>(bounds: &R) -> Range<SemVer> {
     match (bounds.start_bound(), bounds.end_bound()) {
-        (Bound::Unbounded, Bound::Unbounded) => Range::any(),
+        (Bound::Unbounded, Bound::Unbounded) => Range::full(),
         (Bound::Unbounded, Bound::Excluded(end)) => Range::strictly_lower_than(*end),
         (Bound::Unbounded, Bound::Included(end)) => Range::strictly_lower_than(bump(end)),
         (Bound::Included(start), Bound::Unbounded) => Range::higher_than(*start),
