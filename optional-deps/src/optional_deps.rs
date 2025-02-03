@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::index::{Dep, Index};
-use core::borrow::Borrow;
 use core::fmt::Display;
-use pubgrub::range::Range;
-use pubgrub::solver::{Dependencies, DependencyConstraints, DependencyProvider};
-use pubgrub::type_aliases::Map;
-use pubgrub::version::NumberVersion as Version;
+use pubgrub::Map;
+use pubgrub::Range;
+use pubgrub::{Dependencies, DependencyConstraints, DependencyProvider};
+use std::convert::Infallible;
 use std::str::FromStr;
+use u32 as Version;
 
 /// A package is either a base package like "a",
 /// or a feature package, corresponding to a feature associated to a base package.
@@ -57,44 +57,67 @@ impl Index {
     }
 }
 
-impl DependencyProvider<Package, Version> for Index {
-    fn choose_package_version<T: Borrow<Package>, U: Borrow<Range<Version>>>(
+impl DependencyProvider for Index {
+    type P = Package;
+
+    type V = Version;
+
+    type VS = Range<Version>;
+
+    type M = String;
+
+    fn prioritize(
         &self,
-        potential_packages: impl Iterator<Item = (T, U)>,
-    ) -> Result<(T, Option<Version>), Box<dyn std::error::Error>> {
-        Ok(pubgrub::solver::choose_package_with_fewest_versions(
-            |p| self.list_versions(p).cloned(),
-            potential_packages,
-        ))
+        _package: &Self::P,
+        _range: &Self::VS,
+        _package_conflicts_counts: &pubgrub::PackageResolutionStatistics,
+    ) -> Self::Priority {
+        1
+    }
+
+    type Priority = u8;
+
+    type Err = Infallible;
+
+    fn choose_version(
+        &self,
+        package: &Self::P,
+        range: &Self::VS,
+    ) -> Result<Option<Self::V>, Self::Err> {
+        Ok(self
+            .list_versions(package)
+            .filter(|v| range.contains(v))
+            .next()
+            .cloned())
     }
 
     fn get_dependencies(
         &self,
         package: &Package,
         version: &Version,
-    ) -> Result<Dependencies<Package, Version>, Box<dyn std::error::Error>> {
+    ) -> Result<Dependencies<Package, Self::VS, String>, Self::Err> {
         let all_versions = match self.packages.get(package.base_pkg()) {
-            None => return Ok(Dependencies::Unknown),
+            None => return Ok(Dependencies::Unavailable("".into())),
             Some(all_versions) => all_versions,
         };
         let deps = match all_versions.get(version) {
-            None => return Ok(Dependencies::Unknown),
+            None => return Ok(Dependencies::Unavailable("".into())),
             Some(deps) => deps,
         };
 
         match package {
             // If we asked for a base package, we simply return the mandatory dependencies.
-            Package::Base(_) => Ok(Dependencies::Known(from_deps(&deps.mandatory))),
+            Package::Base(_) => Ok(Dependencies::Available(from_deps(&deps.mandatory))),
             // Otherwise, we concatenate the feature deps with a dependency to the base package.
             Package::Feature { base, feature } => match deps.optional.get(feature) {
-                None => Ok(Dependencies::Unknown),
+                None => Ok(Dependencies::Unavailable("".into())),
                 Some(feature_deps) => {
                     let mut all_deps = from_deps(feature_deps);
                     all_deps.insert(
                         Package::Base(base.to_string()),
-                        Range::exact(version.clone()),
+                        Range::singleton(version.clone()),
                     );
-                    Ok(Dependencies::Known(all_deps))
+                    Ok(Dependencies::Available(all_deps))
                 }
             },
         }
@@ -102,7 +125,7 @@ impl DependencyProvider<Package, Version> for Index {
 }
 
 /// Helper function to convert Index deps into what is expected by the dependency provider.
-fn from_deps(deps: &Map<String, Dep>) -> DependencyConstraints<Package, Version> {
+fn from_deps(deps: &Map<String, Dep>) -> DependencyConstraints<Package, Range<Version>> {
     deps.iter()
         .flat_map(|(base_pkg, dep)| {
             let feature_count = dep.features.len();
@@ -133,22 +156,22 @@ fn from_deps(deps: &Map<String, Dep>) -> DependencyConstraints<Package, Version>
 pub mod tests {
     use super::*;
     use core::fmt::Debug;
-    use pubgrub::error::PubGrubError;
-    use pubgrub::type_aliases::{Map, SelectedDependencies};
+    use pubgrub::PubGrubError;
+    use pubgrub::{Map, SelectedDependencies};
     type R = core::ops::RangeFull;
 
     /// Helper function to simplify the tests code.
     fn resolve(
-        provider: &impl DependencyProvider<Package, Version>,
+        provider: &Index,
         pkg: &str,
         version: u32,
-    ) -> Result<SelectedDependencies<Package, Version>, PubGrubError<Package, Version>> {
+    ) -> Result<SelectedDependencies<Index>, PubGrubError<Index>> {
         let pkg = Package::from_str(pkg).unwrap();
-        pubgrub::solver::resolve(provider, pkg, version)
+        pubgrub::resolve(provider, pkg, version)
     }
 
     /// Helper function to build a solution selection.
-    fn select(packages: &[(&str, u32)]) -> SelectedDependencies<Package, Version> {
+    fn select(packages: &[(&str, u32)]) -> SelectedDependencies<Index> {
         packages
             .iter()
             .map(|(p, v)| (Package::from_str(p).unwrap(), Version::from(*v)))

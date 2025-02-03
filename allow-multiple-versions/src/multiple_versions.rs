@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::index::Index;
-use core::borrow::Borrow;
 use core::fmt::Display;
 use itertools::Either;
-use pubgrub::range::Range;
-use pubgrub::solver::{Dependencies, DependencyProvider};
-use pubgrub::type_aliases::Map;
-use pubgrub::version::SemanticVersion as SemVer;
+use pubgrub::Map;
+use pubgrub::Range;
+use pubgrub::SemanticVersion as SemVer;
+use pubgrub::{Dependencies, DependencyProvider};
+use std::convert::Infallible;
+use std::ops::Bound;
 use std::str::FromStr;
 
 /// A package is either a bucket, or a proxy between two packages.
@@ -126,24 +127,46 @@ fn bucket_version(v: SemVer) -> SemVer {
     (major, 0, 0).into()
 }
 
-impl DependencyProvider<Package, SemVer> for Index {
-    fn choose_package_version<T: Borrow<Package>, U: Borrow<Range<SemVer>>>(
+impl DependencyProvider for Index {
+    type P = Package;
+
+    type V = SemVer;
+
+    type VS = Range<SemVer>;
+
+    type M = String;
+
+    fn prioritize(
         &self,
-        potential_packages: impl Iterator<Item = (T, U)>,
-    ) -> Result<(T, Option<SemVer>), Box<dyn std::error::Error>> {
-        Ok(pubgrub::solver::choose_package_with_fewest_versions(
-            |p| self.list_versions(p),
-            potential_packages,
-        ))
+        _package: &Self::P,
+        _range: &Self::VS,
+        _package_conflicts_counts: &pubgrub::PackageResolutionStatistics,
+    ) -> Self::Priority {
+        1
+    }
+
+    type Priority = u8;
+
+    type Err = Infallible;
+
+    fn choose_version(
+        &self,
+        package: &Self::P,
+        range: &Self::VS,
+    ) -> Result<Option<Self::V>, Self::Err> {
+        Ok(self
+            .list_versions(package)
+            .filter(|v| range.contains(v))
+            .next())
     }
 
     fn get_dependencies(
         &self,
         package: &Package,
         version: &SemVer,
-    ) -> Result<Dependencies<Package, SemVer>, Box<dyn std::error::Error>> {
+    ) -> Result<Dependencies<Package, Self::VS, Self::M>, Self::Err> {
         let all_versions = match self.packages.get(package.pkg_name()) {
-            None => return Ok(Dependencies::Unknown),
+            None => return Ok(Dependencies::Unavailable("".into())),
             Some(all_versions) => all_versions,
         };
 
@@ -153,7 +176,7 @@ impl DependencyProvider<Package, SemVer> for Index {
                 // either a dependency to a bucket package if the range is fully contained within one bucket,
                 // or a dependency to a proxy package at any version otherwise.
                 let deps = match all_versions.get(version) {
-                    None => return Ok(Dependencies::Unknown),
+                    None => return Ok(Dependencies::Unavailable("".into())),
                     Some(deps) => deps,
                 };
                 let pkg_deps = deps
@@ -168,18 +191,18 @@ impl DependencyProvider<Package, SemVer> for Index {
                                 source: (pkg.clone(), version.clone()),
                                 target: name.clone(),
                             };
-                            (proxy, Range::any())
+                            (proxy, Range::full())
                         }
                     })
                     .collect();
-                Ok(Dependencies::Known(pkg_deps))
+                Ok(Dependencies::Available(pkg_deps))
             }
             Package::Proxy { source, target } => {
                 // If this is a proxy package, it depends on a single bucket package, the target,
                 // at a range of versions corresponding to the bucket range of the version asked,
                 // intersected with the original dependency range.
                 let deps = match all_versions.get(&source.1) {
-                    None => return Ok(Dependencies::Unknown),
+                    None => return Ok(Dependencies::Unavailable("".into())),
                     Some(deps) => deps,
                 };
                 let (target_bucket, _, _) = version.clone().into();
@@ -193,7 +216,7 @@ impl DependencyProvider<Package, SemVer> for Index {
                     }),
                     bucket_range.intersection(target_range),
                 );
-                Ok(Dependencies::Known(bucket_dep))
+                Ok(Dependencies::Available(bucket_dep))
             }
         }
     }
@@ -203,36 +226,33 @@ impl DependencyProvider<Package, SemVer> for Index {
 /// this returns that bucket identifier.
 /// Otherwise, it returns None.
 fn single_bucket_spanned(range: &Range<SemVer>) -> Option<u32> {
-    range.lowest_version().and_then(|low| {
-        let bucket_range = Range::between(low, low.bump_major());
-        let bucket_intersect_range = range.intersection(&bucket_range);
-        if range == &bucket_intersect_range {
-            let (major, _, _) = low.into();
-            Some(major)
-        } else {
-            None
-        }
+    let (Bound::Included(low) | Bound::Excluded(low)) = range.bounding_range()?.0 else {
+        return None;
+    };
+    let bucket_range = Range::between(low, low.bump_major());
+    range.subset_of(&bucket_range).then(|| {
+        let (major, _, _) = low.clone().into();
+        major
     })
 }
-
 // TESTS #######################################################################
 
 #[cfg(test)]
 pub mod tests {
     use super::*;
     use core::fmt::Debug;
-    use pubgrub::error::PubGrubError;
-    use pubgrub::type_aliases::{Map, SelectedDependencies};
+    use pubgrub::PubGrubError;
+    use pubgrub::{Map, SelectedDependencies};
     type R = core::ops::RangeFull;
 
     /// Helper function to simplify the tests code.
     fn resolve(
-        provider: &impl DependencyProvider<Package, SemVer>,
+        provider: &Index,
         pkg: &str,
         version: (u32, u32, u32),
-    ) -> Result<SelectedDependencies<Package, SemVer>, PubGrubError<Package, SemVer>> {
+    ) -> Result<SelectedDependencies<Index>, PubGrubError<Index>> {
         let pkg = Package::from_str(pkg).unwrap();
-        pubgrub::solver::resolve(provider, pkg, version).map(|solution| {
+        pubgrub::resolve(provider, pkg, version).map(|solution| {
             // remove proxy packages from the solution
             solution
                 .into_iter()
@@ -245,7 +265,7 @@ pub mod tests {
     }
 
     /// Helper function to build a solution selection.
-    fn select(packages: &[(&str, (u32, u32, u32))]) -> SelectedDependencies<Package, SemVer> {
+    fn select(packages: &[(&str, (u32, u32, u32))]) -> SelectedDependencies<Index> {
         packages
             .iter()
             .map(|(p, v)| (Package::from_str(p).unwrap(), SemVer::from(*v)))
